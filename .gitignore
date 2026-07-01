@@ -4,3 +4,5 @@ data/db.json
 .env
 .env.local
 *.log
+.vercel
+.env*

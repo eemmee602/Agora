@@ -596,7 +596,12 @@ export default function App() {
   };
 
   // Logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+      console.warn("[Agora] logout call failed", e);
+    }
     setCurrentUser(null);
     sessionStorage.removeItem("agora_user");
     setChats([]);
