@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { Shield, Lock, User, Mail, Globe, AlertCircle, ArrowRight, Sparkles, KeyRound } from "lucide-react";
-import { supabase } from "../lib/supabase";
 
 interface AuthScreenProps {
   onLoginSuccess: (user: any) => void;
@@ -9,6 +8,8 @@ interface AuthScreenProps {
 }
 
 type AuthMode = "login" | "register" | "magic";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
 export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProps) {
   const [mode, setMode] = useState<AuthMode>("login");
@@ -21,36 +22,19 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (error) console.warn("[Agora] session check", error.message);
-      if (session?.user) {
-        buildAgoraUser(session.user).then(onLoginSuccess);
-      }
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
-        const user = await buildAgoraUser(session.user);
-        onLoginSuccess(user);
-      }
-    });
-
-    return () => listener.subscription.unsubscribe();
+    const saved = sessionStorage.getItem("agora_user");
+    if (saved) {
+      try {
+        const user = JSON.parse(saved);
+        if (user?.id) onLoginSuccess(user);
+      } catch {}
+    }
   }, []);
 
-  async function buildAgoraUser(supabaseUser: any): Promise<any> {
-    const metadata = supabaseUser.user_metadata || {};
-    const user = {
-      id: supabaseUser.id,
-      email: supabaseUser.email || metadata.email || "",
-      username: metadata.username || metadata.name || supabaseUser.email?.split("@")[0] || "User",
-      avatar: metadata.avatar_url || metadata.picture || "",
-      role: metadata.role || "user",
-      created_at: supabaseUser.created_at,
-    };
+  const persistUser = (user: any) => {
     sessionStorage.setItem("agora_user", JSON.stringify(user));
-    return user;
-  }
+    onLoginSuccess(user);
+  };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,14 +50,13 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
 
     try {
       if (mode === "magic") {
-        const { error } = await supabase.auth.signInWithOtp({
-          email: email.trim().toLowerCase(),
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-            data: { username: username.trim() || undefined },
-          },
+        const res = await fetch(`${API_BASE}/auth/magic`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim().toLowerCase() }),
         });
-        if (error) throw error;
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Erreur lien magique.");
         setInfoMsg("Lien magique envoyé. Vérifie tes emails (et le spam).");
         setIsSubmitting(false);
         return;
@@ -90,33 +73,30 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
           setIsSubmitting(false);
           return;
         }
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim().toLowerCase(),
-          password,
-          options: {
-            data: {
-              username: username.trim(),
-              role: "user",
-            },
-          },
+        const res = await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: username.trim(),
+            email: email.trim().toLowerCase(),
+            password,
+          }),
         });
-        if (error) throw error;
-        if (data.user && data.session) {
-          const user = await buildAgoraUser(data.user);
-          onLoginSuccess(user);
-        } else {
-          setInfoMsg("Compte créé. Vérifie tes emails pour confirmer si nécessaire.");
-        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Erreur inscription.");
+        persistUser(data.user);
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
-          password,
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email.trim().toLowerCase(),
+            password,
+          }),
         });
-        if (error) throw error;
-        if (data.user) {
-          const user = await buildAgoraUser(data.user);
-          onLoginSuccess(user);
-        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Identifiants invalides.");
+        persistUser(data.user);
       }
     } catch (err: any) {
       setAuthError(err.message || "Erreur d'authentification.");
@@ -126,19 +106,7 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
   };
 
   const handleOAuth = async (provider: "google") => {
-    setAuthError("");
-    setIsSubmitting(true);
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        skipBrowserRedirect: false,
-      },
-    });
-    if (error) {
-      setAuthError(error.message);
-      setIsSubmitting(false);
-    }
+    setAuthError("Connexion Google temporairement d\u00e9sactiv\u00e9e.");
   };
 
   const isMagic = mode === "magic";
