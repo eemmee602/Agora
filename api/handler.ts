@@ -13,6 +13,7 @@ import { GoogleGenAI } from "@google/genai";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { callLLMWithFallback } from "./llm";
 
 dotenv.config();
 
@@ -163,6 +164,7 @@ interface ChatMessage {
   steps?: MessageStep[];
   attachments?: MessageAttachment[];
   timestamp: string;
+  actualModelUsed?: string;
 }
 
 interface Chat {
@@ -720,19 +722,13 @@ app.post("/api/admin/agents/reset", (req, res) => {
 // COOPERATIVE AGENTS EXECUTION PIPELINE (WITHOUT WASTING EXCESSIVE APIS QUOTA)
 // -----------------------------------------------------------------
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY || "" });
-
-async function callGoogleLLM(prompt: string, model: string = "gemini-1.5-flash"): Promise<string> {
-  try {
-    const result = await genAI.models.generateContent({ model, contents: prompt });
-    const text = result.text;
-    if (!text) throw new Error("Reponse vide de Gemini");
-    return text;
-  } catch (err: any) {
-    console.error("[Agora] Gemini error", err);
-    throw new Error("Erreur API Google: " + (err.message || "inconnue"));
-  }
+// Multi-provider LLM with fallback
+async function callLLM(prompt: string, model: string = "gemini-1.5-flash"): Promise<{ text: string; provider: string }> {
+  return callLLMWithFallback(prompt);
 }
+
+// Deprecated direct GoogleGenAI — kept inactive; use callLLM instead
+const _genAI = new GoogleGenAI({ apiKey: "" });
 
 function routeModel(modelName: string): { provider: string; model: string } {
   if (modelName.startsWith("gemini")) return { provider: "google", model: modelName };
@@ -838,9 +834,10 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
   try {
     const prompt = `Tu es un assistant multi-agents nomme Agora. L'utilisateur demande : "${content}". Les agents impliques sont : ${selected.map((a) => `${a.name} (${a.role})`).join(", ")}. Donne une reponse utile, concise, en francais, maximum 400 mots.`;
 
-    const responseText = await callGoogleLLM(prompt, "gemini-1.5-flash");
+    const { text: responseText, provider } = await callLLM(prompt, "gemini-1.5-flash");
 
     aiMessage.content = responseText;
+    aiMessage.actualModelUsed = provider;
     steps.forEach((step) => {
       step.status = "completed";
       step.details = "Reponse generee";
