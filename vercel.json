@@ -4,7 +4,7 @@
   "outputDirectory": "dist",
   "framework": null,
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/server.cjs" },
+    { "source": "/api/(.*)", "destination": "/api/handler" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
@@ -16,5 +16,8 @@
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type,Authorization" }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/handler.ts": { "maxDuration": 30 }
+  }
 }

@@ -3,7 +3,12 @@ import path from "path";
 import fs from "fs";
 import cors from "cors";
 import dotenv from "dotenv";
-import { createServer as createViteServer } from "vite";
+let createViteServer: any;
+if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  ({ createServer: createViteServer } = require("vite"));
+}
+
 import { GoogleGenAI } from "@google/genai";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -739,4 +744,15 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
   }
 })();
 
-export default app;
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default (req: VercelRequest, res: VercelResponse) => {
+  try {
+    return app(req as any, res as any);
+  } catch (err: any) {
+    console.error('[Agora handler error]', err?.stack || err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Handler error', message: err?.message || String(err) });
+    }
+  }
+};
