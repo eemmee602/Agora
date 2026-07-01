@@ -352,6 +352,38 @@ app.post("/api/auth/logout", authMiddleware, async (req, res) => {
   return res.json({ success: true });
 });
 
+// Admin self-service password reset (local DB only)
+app.post("/api/auth/reset-admin-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ success: false, error: "Champs requis." });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, error: "Mot de passe trop court (6 caracteres min)." });
+  }
+
+  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  const resetCode = (process.env.ADMIN_RESET_CODE || adminEmail).toLowerCase().trim();
+
+  if (email.toLowerCase().trim() !== adminEmail) {
+    return res.status(403).json({ success: false, error: "Reset reserve au compte admin." });
+  }
+  if (code.toLowerCase().trim() !== resetCode) {
+    return res.status(403).json({ success: false, error: "Code de reinitialisation invalide." });
+  }
+
+  const db = readDB();
+  const user = db.users.find(u => u.email.toLowerCase() === adminEmail);
+  if (!user) {
+    return res.status(404).json({ success: false, error: "Compte admin introuvable." });
+  }
+
+  user.passwordHash = hashPassword(newPassword);
+  writeDB(db);
+  addLog("success", `Reinitialisation mot de passe admin : ${user.username}`, "Administration");
+  return res.json({ success: true, message: "Mot de passe mis a jour." });
+});
+
 // Admin routes are protected
 app.use("/api/admin", authMiddleware);
 
