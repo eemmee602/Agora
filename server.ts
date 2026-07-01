@@ -5,28 +5,72 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { OAuth2Client } from "google-auth-library";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
-// Path to JSON persistent store
 const DB_PATH = path.join(process.cwd(), "data", "db.json");
 
-// Ensure data directory exists
 if (!fs.existsSync(path.dirname(DB_PATH))) {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 }
 
-// In-Memory Fallback & Database Initialization
+const JWT_SECRET = process.env.JWT_SECRET;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+function generateId(prefix = "id"): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function hashPassword(password: string): string {
+  return bcrypt.hashSync(password, 10);
+}
+
+function verifyPassword(password: string, hash: string): boolean {
+  return bcrypt.compareSync(password, hash);
+}
+
+function signToken(user: User): string {
+  if (!JWT_SECRET) throw new Error("JWT_SECRET not configured");
+  return jwt.sign({ id: user.id, email: user.email, role: user.role, username: user.username }, JWT_SECRET, { expiresIn: "7d" });
+}
+
+function verifyToken(token: string): any {
+  if (!JWT_SECRET) throw new Error("JWT_SECRET not configured");
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+function authMiddleware(req: any, res: any, next: any) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ success: false, error: "Token manquant." });
+  }
+  const decoded = verifyToken(authHeader.slice(7));
+  if (!decoded) {
+    return res.status(401).json({ success: false, error: "Token invalide." });
+  }
+  req.user = { id: decoded.id, email: decoded.email, role: decoded.role, username: decoded.username };
+  next();
+}
+
 interface User {
   id: string;
   username: string;
   email: string;
+  passwordHash?: string;
   role: "admin" | "user";
   quotaLimit: number;
   quotaUsed: number;
@@ -113,127 +157,78 @@ interface DB {
   chats: Chat[];
   logs: SystemLog[];
 }
+// Extend Express request
+declare global {
+  namespace Express {
+    interface Request {
+      user?: { id: string; email: string; role: string; username?: string };
+    }
+  }
+}
+
 
 const defaultDB: DB = {
-  users: [
-    {
-      id: "admin-emerick",
-      username: "Emerick",
-      email: "emerick@agora.ai",
-      role: "admin",
-      quotaLimit: 10000,
-      quotaUsed: 128,
-      apiKeys: [
-        {
-          id: "key-default",
-          name: "Agora Core Key",
-          provider: "openrouter",
-          key: "[REDACTED_OPENROUTER_KEY_1]",
-          model: "google/gemini-2.5-flash",
-          active: true
-        }
-      ],
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: "admin-sso",
-      username: "Egiroux Lafontaine",
-      email: "egirouxlafontaine@gmail.com",
-      role: "admin",
-      quotaLimit: 10000,
-      quotaUsed: 42,
-      apiKeys: [
-        {
-          id: "key-sso-default",
-          name: "Sponsor Key",
-          provider: "openrouter",
-          key: "[REDACTED_OPENROUTER_KEY_2]",
-          model: "google/gemini-2.5-pro",
-          active: true
-        }
-      ],
-      createdAt: new Date().toISOString()
-    }
-  ],
+  users: [],
   agents: [
     {
       id: "agent-architect",
-      name: "Architecte A∀-01",
+      name: "Architecte A\u2200-01",
       role: "Superviseur & Planificateur",
       avatar: "https://images.unsplash.com/photo-1614741118887-7a4ee193a5fa?w=150&auto=format&fit=crop&q=80",
-      description: "Supervise l'exécution globale, segmente les tâches complexes et distribue la charge de travail aux agents spécialisés.",
-      skills: ["Planification tactique", "Optimisation de flux", "Gestion de dépendances", "Vérification des buts"],
+      description: "Supervise l\'execution globale, segmente les taches complexes et distribue la charge de travail aux agents specialises.",
+      skills: ["Planification tactique", "Optimisation de flux", "Gestion de dependances", "Verification des buts"],
       status: "idle",
       taskProgress: 0,
       lastActive: new Date().toISOString()
     },
     {
       id: "agent-coder",
-      name: "Codeur A∀-02",
-      role: "Ingénieur logiciel principal",
+      name: "Codeur A\u2200-02",
+      role: "Ingenieur logiciel principal",
       avatar: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=150&auto=format&fit=crop&q=80",
-      description: "Spécialisé dans la génération de code, la création de fichiers automatisés (.py, .lua, .txt) et l'ajout de nouvelles compétences.",
-      skills: ["Génération de scripts", "Débogage automatique", "Lua, Python, TypeScript", "Création de Skills"],
+      description: "Specialise dans la generation de code, la creation de fichiers automatises (.py, .lua, .txt) et l\'ajout de nouvelles competences.",
+      skills: ["Generation de scripts", "Debogage automatique", "Lua, Python, TypeScript", "Creation de Skills"],
       status: "idle",
       taskProgress: 0,
       lastActive: new Date().toISOString()
     },
     {
       id: "agent-security",
-      name: "Sécurité A∀-03",
-      role: "Auditeur & Gardien d'Intégrité",
+      name: "Securite A\u2200-03",
+      role: "Auditeur & Gardien d\'Integrite",
       avatar: "https://images.unsplash.com/photo-1563986768609-322da13575f3?w=150&auto=format&fit=crop&q=80",
-      description: "Vérifie chaque ligne de code générée, s'assure du respect des quotas d'utilisation et sécurise les échanges réseau.",
-      skills: ["Audit de vulnérabilité", "Filtrage de scripts", "Contrôle de Sandboxing", "Gestion d'intégrité"],
+      description: "Verifie chaque ligne de code generee, s\'assure du respect des quotas d\'utilisation et securise les echanges reseau.",
+      skills: ["Audit de vulnerabilite", "Filtrage de scripts", "Controle de Sandboxing", "Gestion d\'integrite"],
       status: "idle",
       taskProgress: 0,
       lastActive: new Date().toISOString()
     },
     {
       id: "agent-searcher",
-      name: "Chercheur A∀-04",
+      name: "Chercheur A\u2200-04",
       role: "Explorateur du Web",
       avatar: "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?w=150&auto=format&fit=crop&q=80",
-      description: "Effectue des recherches en temps réel et extrait les sources et URL pertinentes de manière économique.",
-      skills: ["Recherche Web ciblée", "Extraction d'URL", "Filtrage de pertinence", "Synthèse documentaire"],
+      description: "Effectue des recherches en temps reel et extrait les sources et URL pertinentes de maniere economique.",
+      skills: ["Recherche Web ciblee", "Extraction d\'URL", "Filtrage de pertinence", "Synthese documentaire"],
       status: "idle",
       taskProgress: 0,
       lastActive: new Date().toISOString()
     }
   ],
-  chats: [
-    {
-      id: "chat-welcome",
-      userId: "admin-emerick",
-      userName: "Emerick",
-      title: "Bienvenue sur Agora Ai",
-      createdAt: new Date().toISOString(),
-      messages: [
-        {
-          id: "m-welcome",
-          senderId: "system",
-          senderName: "Agora Ai",
-          senderRole: "system",
-          content: "Système démarré avec succès. Les agents Architecte, Codeur, Sécurité et Chercheur sont synchronisés et prêts à collaborer sous votre autorité.",
-          timestamp: new Date().toISOString()
-        }
-      ],
-      activeModel: "gemini-2.5-flash"
-    }
-  ],
+  chats: [],
   logs: [
     {
-      id: "log-1",
+      id: generateId("log"),
       timestamp: new Date().toISOString(),
       type: "info",
-      message: "Plateforme Agora Ai initialisée en mode Liquid Glass.",
+      message: "Plateforme Agora Ai initialisee en mode securise.",
       source: "System"
     },
     {
-      id: "log-2",
+      id: generateId("log"),
       timestamp: new Date().toISOString(),
       type: "success",
-      message: "Agents synchronisés en arbre de décision collaboratif.",
+      message: "Agents synchronises en arbre de decision collaboratif.",
       source: "Architecte"
     }
   ]
@@ -244,333 +239,168 @@ function readDB(): DB {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, "utf-8");
       const parsed = JSON.parse(data);
-      
-      // Auto-migrate: remove parentheses in agent names if present
+      // Remove parentheses in agent names if present (legacy migration)
       let mutated = false;
-      if (parsed.agents && Array.isArray(parsed.agents)) {
-        parsed.agents.forEach((agent: any) => {
-          if (agent.name && typeof agent.name === "string" && agent.name.includes("(")) {
-            agent.name = agent.name.replace(/\(([^)]+)\)/, "$1").trim();
+      if (Array.isArray(parsed.agents)) {
+        parsed.agents.forEach((agent: Agent) => {
+          if (agent.name.includes("(") || agent.name.includes(")")) {
+            agent.name = agent.name.replace(/[()]/g, "-");
             mutated = true;
           }
         });
       }
-      
-      if (mutated) {
-        fs.writeFileSync(DB_PATH, JSON.stringify(parsed, null, 2), "utf-8");
-      }
-      
+      if (mutated) writeDB(parsed);
       return parsed;
     }
   } catch (err) {
-    console.error("Error reading database file, resetting to default", err);
+    console.error("Error reading DB, using default:", err);
   }
   writeDB(defaultDB);
   return defaultDB;
 }
 
-function writeDB(data: DB) {
+function writeDB(db: DB) {
   try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
+    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf-8");
   } catch (err) {
-    console.error("Error writing database file", err);
+    console.error("Error writing DB:", err);
   }
 }
 
-// Global server Gemini configuration
-const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.warn("GEMINI_API_KEY is not defined in the server environment. Fallback simulation active.");
-  }
-  return new GoogleGenAI({
-    apiKey: apiKey || "MOCK_KEY",
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
-};
-
-// Resilient Gemini content generation with retry (exponential backoff) and automatic model fallback
-async function callGeminiStreamWithRetryAndFallback(
-  client: GoogleGenAI,
-  contents: any,
-  config: any,
-  preferredModel: string,
-  onChunk: (text: string) => void
-): Promise<string> {
-  const modelsToTry = [
-    preferredModel,
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-3.1-pro"
-  ];
-  
-  const uniqueModels = Array.from(new Set(modelsToTry.filter(Boolean)));
-  let lastError: any = null;
-  
-  for (const model of uniqueModels) {
-    let attempt = 0;
-    const maxAttempts = 3;
-    
-    while (attempt < maxAttempts) {
-      try {
-        console.log(`[Resilient Gemini Stream] Requesting ${model} (Attempt ${attempt + 1}/${maxAttempts})...`);
-        const responseStream = await client.models.generateContentStream({
-          model: model,
-          contents: contents,
-          config: config
-        });
-        
-        let fullText = "";
-        for await (const chunk of responseStream) {
-          const chunkText = chunk.text;
-          if (chunkText) {
-            fullText += chunkText;
-            onChunk(chunkText);
-          }
-        }
-        
-        if (fullText) {
-          console.log(`[Resilient Gemini Stream] Successfully streamed response using model ${model}`);
-          return fullText;
-        }
-        throw new Error("Empty text returned from stream.");
-      } catch (err: any) {
-        lastError = err;
-        const errMessage = err?.message || String(err);
-        const errStr = errMessage.toLowerCase();
-        
-        // If quota exceeded or resource exhausted, do NOT retry on this model. Move to the next model immediately.
-        const isQuotaExceeded = 
-          errStr.includes("quota exceeded") || 
-          errStr.includes("exceeded your current quota") || 
-          errStr.includes("resource_exhausted") || 
-          errStr.includes("billing details") ||
-          errMessage.includes("RESOURCE_EXHAUSTED");
-
-        if (isQuotaExceeded) {
-          console.warn(`[Resilient Gemini Stream] Quota exceeded for model ${model}. Switching to fallback model immediately.`);
-          break; // break the attempt loop to move to next model
-        }
-        
-        // Detect if error is transient
-        const isTransient = 
-          errMessage.includes("503") || 
-          errMessage.includes("429") ||
-          errStr.includes("unavailable") || 
-          errStr.includes("high demand") || 
-          errStr.includes("overloaded") || 
-          errStr.includes("rate limit") ||
-          errStr.includes("quota");
-          
-        if (isTransient) {
-          attempt++;
-          if (attempt < maxAttempts) {
-            const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-            console.warn(`[Resilient Gemini Stream] Transient error with model ${model}: ${errMessage}. Retrying in ${Math.round(backoffMs)}ms...`);
-            await new Promise(resolve => setTimeout(resolve, backoffMs));
-            continue;
-          }
-        }
-        
-        console.warn(`[Resilient Gemini Stream] Failed with model ${model}: ${errMessage}. Switching to fallback models.`);
-        break;
-      }
-    }
-  }
-  
-  throw lastError || new Error("Failed to stream content with any available Gemini models");
-}
-
-// Resilient Gemini content generation with retry (exponential backoff) and automatic model fallback
-async function callGeminiWithRetryAndFallback(
-  client: GoogleGenAI,
-  contents: any,
-  config: any,
-  preferredModel: string
-): Promise<string> {
-  const modelsToTry = [
-    preferredModel,
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-3.1-pro"
-  ];
-  
-  const uniqueModels = Array.from(new Set(modelsToTry.filter(Boolean)));
-  let lastError: any = null;
-  
-  for (const model of uniqueModels) {
-    let attempt = 0;
-    const maxAttempts = 3;
-    
-    while (attempt < maxAttempts) {
-      try {
-        console.log(`[Resilient Gemini] Requesting ${model} (Attempt ${attempt + 1}/${maxAttempts})...`);
-        const response = await client.models.generateContent({
-          model: model,
-          contents: contents,
-          config: config
-        });
-        
-        if (response && response.text) {
-          console.log(`[Resilient Gemini] Successfully generated response using model ${model}`);
-          return response.text;
-        }
-        throw new Error("Empty text returned from API.");
-      } catch (err: any) {
-        lastError = err;
-        const errMessage = err?.message || String(err);
-        const errStr = errMessage.toLowerCase();
-        
-        // If quota exceeded or resource exhausted, do NOT retry on this model. Move to the next model immediately.
-        const isQuotaExceeded = 
-          errStr.includes("quota exceeded") || 
-          errStr.includes("exceeded your current quota") || 
-          errStr.includes("resource_exhausted") || 
-          errStr.includes("billing details") ||
-          errMessage.includes("RESOURCE_EXHAUSTED");
-
-        if (isQuotaExceeded) {
-          console.warn(`[Resilient Gemini] Quota exceeded for model ${model}. Switching to fallback model immediately.`);
-          break; // break the attempt loop to move to next model
-        }
-        
-        // Detect if error is transient (503, 429, overloaded, rate limit, unavailable, high demand)
-        const isTransient = 
-          errMessage.includes("503") || 
-          errMessage.includes("429") ||
-          errStr.includes("unavailable") || 
-          errStr.includes("high demand") || 
-          errStr.includes("overloaded") || 
-          errStr.includes("rate limit") ||
-          errStr.includes("quota");
-          
-        if (isTransient) {
-          attempt++;
-          if (attempt < maxAttempts) {
-            const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-            console.warn(`[Resilient Gemini] Transient error with model ${model}: ${errMessage}. Retrying in ${Math.round(backoffMs)}ms...`);
-            await new Promise(resolve => setTimeout(resolve, backoffMs));
-            continue;
-          }
-        }
-        
-        // Non-transient or exhausted retries: break out of loop to switch to next model
-        console.warn(`[Resilient Gemini] Failed with model ${model}: ${errMessage}. Switching to fallback models.`);
-        break;
-      }
-    }
-  }
-  
-  throw lastError || new Error("Failed to generate content with any available Gemini models");
-}
-
-// Log helper
-function addLog(type: "info" | "success" | "warning" | "error", message: string, source: string) {
+function addLog(type: SystemLog["type"], message: string, source: string) {
   const db = readDB();
   db.logs.unshift({
-    id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+    id: generateId("log"),
     timestamp: new Date().toISOString(),
     type,
     message,
     source
   });
-  // Keep last 150 logs
   if (db.logs.length > 150) db.logs = db.logs.slice(0, 150);
   writeDB(db);
 }
 
+function sanitizeUser(u: User) {
+  const { passwordHash, ...rest } = u;
+  return rest;
+}
+
 // ---------------------------------------------
-// API ENDPOINTS
+// AUTH ENDPOINTS (SECURE)
 // ---------------------------------------------
 
-// Auth: Login
-app.post("/api/auth/login", (req, res) => {
-  const { username, password } = req.body;
+app.post("/api/auth/register", (req, res) => {
+  const { username, email, password } = req.body;
+  if (!username || !email || !password) {
+    return res.status(400).json({ success: false, error: "Champs requis manquants." });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ success: false, error: "Mot de passe trop court (8 caracteres min)." });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, error: "Email invalide." });
+  }
+
   const db = readDB();
-
-  // Admin Check
-  if (username === "Emerick" && password === process.env.AGORA_ADMIN_PASSWORD || "[REDACTED]") {
-    const adminUser = db.users.find(u => u.username === "Emerick");
-    addLog("success", "Administrateur Emerick connecté par identifiants.", "Authentification");
-    return res.json({ success: true, user: adminUser });
+  if (db.users.find(u => u.email.toLowerCase() === email.toLowerCase())) {
+    return res.status(409).json({ success: false, error: "Cet email est deja utilise." });
+  }
+  if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
+    return res.status(409).json({ success: false, error: "Ce nom d\'utilisateur est deja pris." });
   }
 
-  // Google account fallback or regular user
-  const foundUser = db.users.find(u => u.username.toLowerCase() === username.toLowerCase() && password === process.env.AGORA_ADMIN_PASSWORD || "[REDACTED]");
-  if (foundUser) {
-    addLog("success", `Utilisateur ${foundUser.username} connecté.`, "Authentification");
-    return res.json({ success: true, user: foundUser });
-  }
-
-  // Attempt to match plain text password or register dynamically for testing
-  const userByEmail = db.users.find(u => u.email.toLowerCase() === username.toLowerCase());
-  if (userByEmail) {
-    addLog("success", `Utilisateur ${userByEmail.username} connecté via email.`, "Authentification");
-    return res.json({ success: true, user: userByEmail });
-  }
-
-  // Create account dynamically if it's new to guarantee smooth testing
   const newUser: User = {
-    id: `user-${Date.now()}`,
-    username: username,
-    email: `${username.toLowerCase().replace(/\s+/g, "")}@agora.ai`,
+    id: generateId("user"),
+    username: username.trim(),
+    email: email.trim().toLowerCase(),
+    passwordHash: hashPassword(password),
     role: "user",
-    quotaLimit: 100,
+    quotaLimit: 250,
     quotaUsed: 0,
     apiKeys: [],
     createdAt: new Date().toISOString()
   };
   db.users.push(newUser);
   writeDB(db);
-  addLog("info", `Nouveau compte créé : ${username}`, "Authentification");
-  return res.json({ success: true, user: newUser });
+  addLog("success", `Nouveau compte : ${newUser.username}`, "Authentification");
+
+  const token = signToken(newUser);
+  return res.json({ success: true, token, user: sanitizeUser(newUser) });
 });
 
-// Auth: Google SSO Simulation
-app.post("/api/auth/google", (req, res) => {
-  const { email, name } = req.body;
-  const db = readDB();
-
-  const userEmail = email || "egirouxlafontaine@gmail.com";
-  const userName = name || "Egiroux Lafontaine";
-
-  let foundUser = db.users.find(u => u.email.toLowerCase() === userEmail.toLowerCase());
-
-  if (!foundUser) {
-    // Register dynamically
-    foundUser = {
-      id: `user-google-${Date.now()}`,
-      username: userName,
-      email: userEmail,
-      role: userEmail.toLowerCase() === "egirouxlafontaine@gmail.com" ? "admin" : "user",
-      quotaLimit: userEmail.toLowerCase() === "egirouxlafontaine@gmail.com" ? 10000 : 250,
-      quotaUsed: 0,
-      apiKeys: [],
-      createdAt: new Date().toISOString()
-    };
-    db.users.push(foundUser);
-    writeDB(db);
-    addLog("success", `Nouveau compte via Google SSO : ${userName} (${userEmail})`, "Authentification");
-  } else {
-    addLog("success", `Connexion Google SSO : ${userName}`, "Authentification");
+app.post("/api/auth/login", (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: "Identifiants requis." });
   }
 
-  return res.json({ success: true, user: foundUser });
+  const db = readDB();
+  const user = db.users.find(
+    u => u.username.toLowerCase() === username.toLowerCase() ||
+         u.email.toLowerCase() === username.toLowerCase()
+  );
+
+  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    return res.status(401).json({ success: false, error: "Identifiants invalides." });
+  }
+
+  addLog("success", `Connexion : ${user.username}`, "Authentification");
+  const token = signToken(user);
+  return res.json({ success: true, token, user: sanitizeUser(user) });
 });
 
-// Admin: Retrieve all users
+app.post("/api/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) {
+      return res.status(400).json({ success: false, error: "Credential Google manquant." });
+    }
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ success: false, error: "GOOGLE_CLIENT_ID non configure." });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return res.status(401).json({ success: false, error: "Token Google invalide." });
+    }
+
+    const email = payload.email.toLowerCase();
+    const name = (payload.name || email.split("@")[0]).trim();
+
+    const db = readDB();
+    let user = db.users.find(u => u.email.toLowerCase() === email);
+
+    if (!user) {
+      user = {
+        id: generateId("user-google"),
+        username: name,
+        email,
+        role: "user",
+        quotaLimit: 250,
+        quotaUsed: 0,
+        apiKeys: [],
+        createdAt: new Date().toISOString()
+      };
+      db.users.push(user);
+      writeDB(db);
+      addLog("success", `Nouveau compte Google : ${user.username} (${email})`, "Authentification");
+    } else {
+      addLog("success", `Connexion Google : ${user.username}`, "Authentification");
+    }
+
+    const token = signToken(user);
+    return res.json({ success: true, token, user: sanitizeUser(user) });
+  } catch (err: any) {
+    console.error("Google auth error:", err);
+    return res.status(401).json({ success: false, error: "Echec de la verification Google." });
+  }
+});
+
+// Admin routes are protected\napp.use("/api/admin", authMiddleware);\n\n// Admin: Retrieve all users
 app.get("/api/admin/users", (req, res) => {
   const db = readDB();
   res.json(db.users);
@@ -648,17 +478,24 @@ app.post("/api/agents/:id/skill", (req, res) => {
   res.status(400).json({ error: "Impossible d'ajouter la compétence" });
 });
 
+// Chats routes are protected
+app.use("/api/chats", authMiddleware);
+
 // Chats: List for user
 app.get("/api/chats", (req, res) => {
-  const userId = req.query.userId as string;
   const db = readDB();
-  const userChats = db.chats.filter(c => c.userId === userId || c.userId === "admin-emerick");
+  const userId = req.user?.id;
+  const userChats = req.user?.role === "admin"
+    ? db.chats
+    : db.chats.filter(c => c.userId === userId);
   res.json(userChats);
 });
 
 // Chats: Create chat
 app.post("/api/chats", (req, res) => {
-  const { userId, userName, title, activeModel } = req.body;
+  const { title, activeModel } = req.body;
+  const userId = req.user?.id;
+  const userName = req.user?.username || "Utilisateur";
   const db = readDB();
 
   const newChat: Chat = {
@@ -686,10 +523,12 @@ app.post("/api/chats", (req, res) => {
 });
 
 // Chats: Delete chat
-app.delete("/api/chats/:id", (req, res) => {
+app.delete("/api/chats/:id", (req: any, res) => {
   const chatId = req.params.id;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
   const db = readDB();
-  const index = db.chats.findIndex(c => c.id === chatId);
+  const index = db.chats.findIndex(c => c.id === chatId && (userRole === "admin" || c.userId === userId));
   if (index !== -1) {
     db.chats.splice(index, 1);
     writeDB(db);
@@ -700,11 +539,13 @@ app.delete("/api/chats/:id", (req, res) => {
 });
 
 // Chats: Update chat (rename or change activeModel)
-app.put("/api/chats/:id", (req, res) => {
+app.put("/api/chats/:id", (req: any, res) => {
   const chatId = req.params.id;
   const { title, activeModel } = req.body;
   const db = readDB();
-  const chatIndex = db.chats.findIndex(c => c.id === chatId);
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const chatIndex = db.chats.findIndex(c => c.id === chatId && (userRole === "admin" || c.userId === userId));
   if (chatIndex !== -1) {
     if (title !== undefined) db.chats[chatIndex].title = title;
     if (activeModel !== undefined) db.chats[chatIndex].activeModel = activeModel;
@@ -715,9 +556,15 @@ app.put("/api/chats/:id", (req, res) => {
   }
 });
 
+// User routes are protected
+app.use("/api/users", authMiddleware);
+
 // Keys: Add/Update API keys for a user
 app.post("/api/users/:userId/keys", (req, res) => {
   const userId = req.params.userId;
+  if (req.user?.role !== "admin" && req.user?.id !== userId) {
+    return res.status(403).json({ success: false, error: "Acces interdit." });
+  }
   const { name, provider, key, model } = req.body;
   const db = readDB();
 
@@ -746,8 +593,11 @@ app.post("/api/users/:userId/keys", (req, res) => {
 });
 
 // Keys: Toggle active state or delete API key
-app.delete("/api/users/:userId/keys/:keyId", (req, res) => {
+app.delete("/api/users/:userId/keys/:keyId", (req: any, res) => {
   const { userId, keyId } = req.params;
+  if (req.user?.role !== "admin" && req.user?.id !== userId) {
+    return res.status(403).json({ success: false, error: "Acces interdit." });
+  }
   const db = readDB();
 
   const user = db.users.find(u => u.id === userId);
@@ -766,6 +616,9 @@ app.delete("/api/users/:userId/keys/:keyId", (req, res) => {
 // Preferences: Save/Update user memory and general preferences
 app.post("/api/users/:userId/preferences", (req, res) => {
   const userId = req.params.userId;
+  if (req.user?.role !== "admin" && req.user?.id !== userId) {
+    return res.status(403).json({ success: false, error: "Acces interdit." });
+  }
   const { memory, preferences } = req.body;
   const db = readDB();
 
@@ -854,14 +707,83 @@ app.all("/api/proxy", async (req, res) => {
   }
 });
 
+
+// ---------------------------------------------
+// GEMINI CLIENT HELPERS
+// ---------------------------------------------
+function getGeminiClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY non configure");
+  }
+  return new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "agora-ai-server" } } });
+}
+
+async function callGeminiWithRetryAndFallback(
+  client: GoogleGenAI,
+  contents: any[],
+  config: any,
+  model: string,
+  retries = 2
+): Promise<string> {
+  let lastErr: any;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const result = await client.models.generateContent({
+        model,
+        contents,
+        config,
+      });
+      return result.text || "";
+    } catch (err) {
+      lastErr = err;
+      if (i < retries) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr || new Error("Echec Gemini apres retries");
+}
+
+async function callGeminiStreamWithRetryAndFallback(
+  client: GoogleGenAI,
+  contents: any[],
+  config: any,
+  model: string,
+  onChunk: (chunk: string) => void,
+  retries = 2
+): Promise<string> {
+  let lastErr: any;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const stream = await client.models.generateContentStream({
+        model,
+        contents,
+        config,
+      });
+      let full = "";
+      for await (const chunk of stream) {
+        const text = chunk.text || "";
+        full += text;
+        onChunk(text);
+      }
+      return full;
+    } catch (err) {
+      lastErr = err;
+      if (i < retries) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr || new Error("Echec Gemini stream apres retries");
+}
+
 // -----------------------------------------------------------------
 // COOPERATIVE AGENTS EXECUTION PIPELINE (WITHOUT WASTING EXCESSIVE APIS QUOTA)
 // -----------------------------------------------------------------
-app.post("/api/chats/:id/messages", async (req, res) => {
+app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
   const startTime = Date.now();
   const chatId = req.params.id;
-  const { senderId, senderName, content, attachments } = req.body;
+  const { content, attachments } = req.body;
   const db = readDB();
+  const senderId = req.user?.id;
+  const senderName = req.user?.username || "Utilisateur";
 
   const chatIndex = db.chats.findIndex(c => c.id === chatId);
   if (chatIndex === -1) {
@@ -869,7 +791,10 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   }
 
   const chat = db.chats[chatIndex];
-  const user = db.users.find(u => u.id === senderId) || db.users[0];
+  if (chat.userId !== senderId) {
+    return res.status(403).json({ error: "Acces refuse." });
+  }
+  const user = db.users.find(u => u.id === senderId);
 
   // Check quota limit
   if (user.quotaUsed >= user.quotaLimit) {
@@ -1387,6 +1312,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
 
   res.end();
 });
+
 
 // Start server/Vite middleware setup
 async function startServer() {
