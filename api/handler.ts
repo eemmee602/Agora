@@ -236,17 +236,60 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   const db = readDB();
-  const user = db.users.find(
+  let user = db.users.find(
     u => u.username.toLowerCase() === identifier.toLowerCase() ||
          u.email.toLowerCase() === identifier.toLowerCase()
   );
 
-  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+  // Fallback: Supabase Auth credential validation
+  let supabaseMatched = false;
+  if (supabase && (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash))) {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: user?.email || identifier,
+        password,
+      });
+      if (!error && data.user) {
+        supabaseMatched = true;
+      }
+    } catch (e: any) {
+      console.error("[Agora] Supabase login fallback error", e?.message || e);
+    }
+  }
+
+  if ((!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) && !supabaseMatched) {
     return res.status(401).json({ success: false, error: "Identifiants invalides." });
   }
 
+  // Auto-create local user from Supabase if missing
+  let adminEmail = (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase().trim();
+  if (!user && supabaseMatched) {
+    try {
+      const { data: list } = await supabase.auth.admin.listUsers();
+      const found = list?.users?.find((u: any) => u.email?.toLowerCase() === identifier.toLowerCase());
+      const id = found?.id || generateId("user");
+      const newUser: User = {
+        id,
+        username: identifier.split("@")[0] || "user",
+        email: identifier.toLowerCase(),
+        role: identifier.toLowerCase() === adminEmail ? "admin" : "user",
+        passwordHash: hashPassword(password),
+        quotaLimit: 1000000,
+        quotaUsed: 0,
+        apiKeys: [],
+        createdAt: new Date().toISOString(),
+      };
+      db.users.push(newUser);
+      writeDB(db);
+      user = newUser;
+    } catch (e: any) {
+      console.error("[Agora] Supabase admin.listUsers failed", e?.message || e);
+      return res.status(500).json({ success: false, error: "Erreur synchronisation utilisateur." });
+    }
+  }
+
   // Auto-promote configured admin email to admin role
-  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  adminEmail = adminEmail || (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase().trim();
   if (adminEmail && user.email.toLowerCase() === adminEmail && user.role !== "admin") {
     user.role = "admin";
     writeDB(db);
@@ -362,18 +405,18 @@ app.post("/api/auth/reset-admin-password", async (req, res) => {
     return res.status(400).json({ success: false, error: "Mot de passe trop court (6 caracteres min)." });
   }
 
-  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
-  const resetCode = (process.env.ADMIN_RESET_CODE || adminEmail).toLowerCase().trim();
+  const adminEmail = "egirouxlafontaine@gmail.com";
+  const resetCode = "emerick-admin-reset-2026";
 
-  if (email.toLowerCase().trim() !== adminEmail) {
-    return res.status(403).json({ success: false, error: "Reset reserve au compte admin." });
+  if (email.toLowerCase().trim() !== adminEmail.toLowerCase()) {
+    return res.status(403).json({ success: false, error: `Reset reserve au compte admin. (email recu: ${email})` });
   }
-  if (code.toLowerCase().trim() !== resetCode) {
+  if (code.toLowerCase().trim() !== resetCode.toLowerCase()) {
     return res.status(403).json({ success: false, error: "Code de reinitialisation invalide." });
   }
 
   const db = readDB();
-  const user = db.users.find(u => u.email.toLowerCase() === adminEmail);
+  const user = db.users.find(u => u.email.toLowerCase() === adminEmail.toLowerCase());
   if (!user) {
     return res.status(404).json({ success: false, error: "Compte admin introuvable." });
   }
@@ -382,6 +425,75 @@ app.post("/api/auth/reset-admin-password", async (req, res) => {
   writeDB(db);
   addLog("success", `Reinitialisation mot de passe admin : ${user.username}`, "Administration");
   return res.json({ success: true, message: "Mot de passe mis a jour." });
+});
+
+// Emergency GET endpoint to force reset without body parsing issues
+app.get("/api/auth/reset-admin-now", async (req, res) => {
+  const { email, code, password } = req.query;
+  const adminEmail = "egirouxlafontaine@gmail.com";
+  if (email !== adminEmail) {
+    return res.status(403).json({ success: false, error: "Email non autorise." });
+  }
+  if (code !== "emerick-admin-reset-2026") {
+    return res.status(403).json({ success: false, error: "Code invalide." });
+  }
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ success: false, error: "Password trop court." });
+  }
+
+  const plainPassword = String(password);
+
+  // Always create/update Supabase Auth user so credentials survive serverless /tmp resets
+  if (supabase) {
+    try {
+      const { data: list, error: listErr } = await supabase.auth.admin.listUsers();
+      if (listErr) throw listErr;
+      const existing = list?.users?.find((u: any) => u.email?.toLowerCase() === adminEmail.toLowerCase());
+      if (existing?.id) {
+        const { error: updErr } = await supabase.auth.admin.updateUserById(existing.id, {
+          password: plainPassword,
+          email_confirm: true,
+        });
+        if (updErr) throw updErr;
+      } else {
+        const { error: createErr } = await supabase.auth.admin.createUser({
+          email: adminEmail,
+          password: plainPassword,
+          email_confirm: true,
+        });
+        if (createErr) throw createErr;
+      }
+    } catch (e: any) {
+      console.error("[Agora] Supabase reset error", e?.message || e);
+      return res.status(500).json({ success: false, error: "Erreur Supabase auth." });
+    }
+  }
+
+  // Mirror in local DB
+  const db = readDB();
+  const user = db.users.find(u => u.email.toLowerCase() === adminEmail.toLowerCase());
+  if (!user) {
+    const newUser: User = {
+      id: generateId("user"),
+      username: "admin",
+      email: adminEmail.toLowerCase(),
+      role: "admin",
+      passwordHash: hashPassword(plainPassword),
+      quotaLimit: 1000000,
+      quotaUsed: 0,
+      apiKeys: [],
+      createdAt: new Date().toISOString(),
+    };
+    db.users.push(newUser);
+    writeDB(db);
+    addLog("success", `Creation admin via GET : ${newUser.username}`, "Administration");
+    return res.json({ success: true, message: "Admin cree et mot de passe mis a jour." });
+  }
+
+  user.passwordHash = hashPassword(plainPassword);
+  writeDB(db);
+  addLog("success", `Reset admin via GET : ${user.username}`, "Administration");
+  return res.json({ success: true, message: "OK" });
 });
 
 // Admin routes are protected
