@@ -139,10 +139,16 @@ export default function App() {
     }
   };
 
+  const authHeaders = (extra: HeadersInit = {}): HeadersInit => {
+    const token = currentUser?.token;
+    if (!token) return { ...extra };
+    return { ...extra, Authorization: `Bearer ${token}` };
+  };
+
   const fetchUserChats = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`/api/chats?userId=${currentUser.id}`);
+      const res = await fetch(`/api/chats?userId=${currentUser.id}`, { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setChats(data);
@@ -157,7 +163,7 @@ export default function App() {
 
   const fetchAgents = async () => {
     try {
-      const res = await fetch("/api/agents");
+      const res = await fetch("/api/agents", { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setAgents(data);
@@ -170,7 +176,7 @@ export default function App() {
   // Admin: Fetch logs
   const fetchAdminLogs = async () => {
     try {
-      const res = await fetch("/api/logs");
+      const res = await fetch("/api/logs", { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -183,15 +189,16 @@ export default function App() {
   // Admin: Fetch all users
   const fetchUsersList = async () => {
     try {
-      const res = await fetch("/api/admin/users");
+      const res = await fetch("/api/admin/users", { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setUsers(data);
         // Keep current user updated with dynamic quota changes
         const currentUpdated = data.find((u: User) => u.id === currentUser?.id);
         if (currentUpdated) {
-          setCurrentUser(currentUpdated);
-          sessionStorage.setItem("agora_user", JSON.stringify(currentUpdated));
+          const updated = { ...currentUser, ...currentUpdated };
+          setCurrentUser(updated);
+          sessionStorage.setItem("agora_user", JSON.stringify(updated));
         }
       }
     } catch (err: any) {
@@ -202,7 +209,7 @@ export default function App() {
   // Admin: Fetch all chats histories
   const fetchAdminChats = async () => {
     try {
-      const res = await fetch("/api/admin/chats");
+      const res = await fetch("/api/admin/chats", { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         // Set all chats if admin wants to audit globally
@@ -228,7 +235,7 @@ export default function App() {
     try {
       const res = await fetch("/api/chats", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           userId: currentUser.id,
           userName: currentUser.username,
@@ -249,7 +256,8 @@ export default function App() {
   const handleDeleteChat = async (chatId: string) => {
     try {
       const res = await fetch(`/api/chats/${chatId}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: authHeaders()
       });
       if (res.ok) {
         setChats(prev => prev.filter(c => c.id !== chatId));
@@ -266,8 +274,8 @@ export default function App() {
   const handleUpdateChat = async (chatId: string, updates: Partial<Chat>) => {
     try {
       const res = await fetch(`/api/chats/${chatId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(updates)
       });
       if (res.ok) {
@@ -317,7 +325,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chats/${activeChat.id}/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           senderId: currentUser.id,
           senderName: currentUser.username,
@@ -480,13 +488,14 @@ export default function App() {
     try {
       const res = await fetch(`/api/users/${currentUser.id}/keys`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, provider, key, model })
       });
       if (res.ok) {
         const data = await res.json();
-        setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        const updated = { ...currentUser, ...data.user };
+        setCurrentUser(updated);
+        sessionStorage.setItem("agora_user", JSON.stringify(updated));
         showToast(`Clé API ${provider.toUpperCase()} activée avec succès !`);
       }
     } catch (err) {
@@ -498,12 +507,14 @@ export default function App() {
     if (!currentUser) return;
     try {
       const res = await fetch(`/api/users/${currentUser.id}/keys/${keyId}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: authHeaders()
       });
       if (res.ok) {
         const data = await res.json();
-        setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        const updated = { ...currentUser, ...data.user };
+        setCurrentUser(updated);
+        sessionStorage.setItem("agora_user", JSON.stringify(updated));
         showToast("Clé API retirée.");
       }
     } catch (err) {
@@ -517,13 +528,14 @@ export default function App() {
     try {
       const res = await fetch(`/api/users/${currentUser.id}/preferences`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ memory, preferences })
       });
       if (res.ok) {
         const data = await res.json();
-        setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        const updated = { ...currentUser, ...data.user };
+        setCurrentUser(updated);
+        sessionStorage.setItem("agora_user", JSON.stringify(updated));
         showToast("Mémoire et préférences de l'IA synchronisées !");
       }
     } catch (err) {
@@ -536,7 +548,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/agents/${agentId}/skill`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ skill })
       });
       if (res.ok) {
@@ -553,7 +565,7 @@ export default function App() {
     try {
       const res = await fetch("/api/admin/users/quota", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ userId, quotaLimit: newQuota })
       });
       if (res.ok) {
@@ -569,7 +581,8 @@ export default function App() {
     if (confirm("Voulez-vous vraiment supprimer ce membre définitivement de la base Agora ?")) {
       try {
         const res = await fetch(`/api/admin/users/${userId}`, {
-          method: "DELETE"
+          method: "DELETE",
+          headers: authHeaders()
         });
         if (res.ok) {
           showToast("Compte membre supprimé définitivement.");
@@ -584,7 +597,8 @@ export default function App() {
   const handleResetAgents = async () => {
     try {
       const res = await fetch("/api/admin/agents/reset", {
-        method: "POST"
+        method: "POST",
+        headers: authHeaders()
       });
       if (res.ok) {
         showToast("Tous les pipelines d'agents ont été réinitialisés.");
@@ -598,7 +612,10 @@ export default function App() {
   // Logout
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: authHeaders()
+      });
     } catch (e) {
       console.warn("[Agora] logout call failed", e);
     }

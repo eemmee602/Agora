@@ -31,9 +31,10 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
     }
   }, []);
 
-  const persistUser = (user: any) => {
-    sessionStorage.setItem("agora_user", JSON.stringify(user));
-    onLoginSuccess(user);
+  const persistUser = (user: any, token?: string) => {
+    const enriched = token ? { ...user, token } : user;
+    sessionStorage.setItem("agora_user", JSON.stringify(enriched));
+    onLoginSuccess(enriched);
   };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
@@ -84,7 +85,7 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Erreur inscription.");
-        persistUser(data.user);
+        persistUser(data.user, data.token);
       } else {
         const res = await fetch(`${API_BASE}/auth/login`, {
           method: "POST",
@@ -96,7 +97,7 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Identifiants invalides.");
-        persistUser(data.user);
+        persistUser(data.user, data.token);
       }
     } catch (err: any) {
       setAuthError(err.message || "Erreur d'authentification.");

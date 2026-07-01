@@ -73,29 +73,34 @@ async function authMiddleware(req: any, res: any, next: any) {
   }
   const token = authHeader.slice(7);
 
-  // 1) Valider JWT local
+  // 1) Valider JWT local (source de verite pour l'application)
   const decoded = verifyToken(token);
   if (!decoded) {
     return res.status(401).json({ success: false, error: "Token invalide." });
   }
 
-  // 2) Valider session Supabase si disponible
+  // 2) Si Supabase est configure, essayer d'enrichir depuis la session Supabase,
+  //    mais ne PAS bloquer si le token local n'est pas une session Supabase.
   if (supabase) {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ success: false, error: "Session Supabase invalide." });
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user) {
+        const metadata = user.user_metadata || {};
+        req.user = {
+          id: user.id,
+          email: user.email || decoded.email,
+          role: metadata.role || decoded.role || "user",
+          username: metadata.username || decoded.username || user.email?.split("@")[0],
+          supabaseId: user.id,
+        };
+        return next();
+      }
+    } catch (e) {
+      console.warn("[Agora] Supabase session validation skipped, using local JWT");
     }
-    const metadata = user.user_metadata || {};
-    req.user = {
-      id: user.id,
-      email: user.email || decoded.email,
-      role: metadata.role || decoded.role || "user",
-      username: metadata.username || decoded.username || user.email?.split("@")[0],
-      supabaseId: user.id,
-    };
-  } else {
-    req.user = { id: decoded.id, email: decoded.email, role: decoded.role, username: decoded.username };
   }
+
+  req.user = { id: decoded.id, email: decoded.email, role: decoded.role, username: decoded.username };
   next();
 }
 
@@ -223,6 +228,45 @@ function sanitizeUser(u: User) {
 // AUTH ENDPOINTS (SECURE)
 // ---------------------------------------------
 
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password, username } = req.body;
+  const identifier = email || username;
+  if (!identifier || !password) {
+    return res.status(400).json({ success: false, error: "Identifiants requis." });
+  }
+
+  const db = readDB();
+  const user = db.users.find(
+    u => u.username.toLowerCase() === identifier.toLowerCase() ||
+         u.email.toLowerCase() === identifier.toLowerCase()
+  );
+
+  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    return res.status(401).json({ success: false, error: "Identifiants invalides." });
+  }
+
+  // Auto-promote configured admin email to admin role
+  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  if (adminEmail && user.email.toLowerCase() === adminEmail && user.role !== "admin") {
+    user.role = "admin";
+    writeDB(db);
+    addLog("success", `Promotion automatique admin : ${user.username}`, "Administration");
+  }
+
+  if (supabase) {
+    const { error } = await supabase.auth.admin.generateLink({
+      type: "magiclink",
+      email: user.email,
+      options: { redirectTo: `${req.headers.origin || ""}/auth/callback` },
+    });
+    if (error) console.warn("[Agora] generate magiclink on login failed", error.message);
+  }
+
+  addLog("success", `Connexion : ${user.username}`, "Authentification");
+  const token = signToken(user);
+  return res.json({ success: true, token, user: sanitizeUser(user) });
+});
+
 app.post("/api/auth/register", async (req, res) => {
   const { username, email, password } = req.body;
   if (!username || !email || !password) {
@@ -258,12 +302,15 @@ app.post("/api/auth/register", async (req, res) => {
     supabaseUserId = data.user?.id;
   }
 
+  const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
+  const isAdmin = adminEmail === email.toLowerCase().trim();
+
   const newUser: User = {
     id: supabaseUserId || generateId("user"),
     username: username.trim(),
     email: email.trim().toLowerCase(),
     passwordHash: hashPassword(password),
-    role: "user",
+    role: isAdmin ? "admin" : "user",
     quotaLimit: 250,
     quotaUsed: 0,
     apiKeys: [],
@@ -271,43 +318,11 @@ app.post("/api/auth/register", async (req, res) => {
   };
   db.users.push(newUser);
   writeDB(db);
-  addLog("success", `Nouveau compte : ${newUser.username}`, "Authentification");
+  addLog("success", `Nouveau compte : ${newUser.username} (role=${newUser.role})`, "Authentification");
 
   const token = signToken(newUser);
   return res.json({ success: true, token, user: sanitizeUser(newUser) });
 });
-
-app.post("/api/auth/login", async (req, res) => {
-  const { email, password, username } = req.body;
-  const identifier = email || username;
-  if (!identifier || !password) {
-    return res.status(400).json({ success: false, error: "Identifiants requis." });
-  }
-
-  const db = readDB();
-  const user = db.users.find(
-    u => u.username.toLowerCase() === identifier.toLowerCase() ||
-         u.email.toLowerCase() === identifier.toLowerCase()
-  );
-
-  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
-    return res.status(401).json({ success: false, error: "Identifiants invalides." });
-  }
-
-  if (supabase) {
-    const { error } = await supabase.auth.admin.generateLink({
-      type: "magiclink",
-      email: user.email,
-      options: { redirectTo: `${req.headers.origin || ""}/auth/callback` },
-    });
-    if (error) console.warn("[Agora] generate magiclink on login failed", error.message);
-  }
-
-  addLog("success", `Connexion : ${user.username}`, "Authentification");
-  const token = signToken(user);
-  return res.json({ success: true, token, user: sanitizeUser(user) });
-});
-
 
 app.post("/api/auth/magic", async (req, res) => {
   const { email } = req.body;
