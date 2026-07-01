@@ -1,0 +1,6 @@
+{
+  "name": "Agora Ai",
+  "description": "Interface d'agents d'intelligence artificielle collaboratifs en temps réel avec tableau de bord sécurisé, système multi-membres, gestion de quotas et interface Liquid Glass.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
