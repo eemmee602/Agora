@@ -9,7 +9,6 @@ if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1") {
   ({ createServer: createViteServer } = require("vite"));
 }
 
-import { GoogleGenAI } from "@google/genai";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
@@ -221,6 +220,15 @@ function addLog(level: string, message: string, category: string) {
   }
 }
 
+const SUPABASE_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T | "timeout"> {
+  return Promise.race([
+    promise.then((v) => v as T | "timeout"),
+    new Promise<T | "timeout">((resolve) => setTimeout(() => resolve("timeout"), ms)),
+  ]);
+}
+
 function sanitizeUser(u: User) {
   const { passwordHash, ...rest } = u;
   return rest;
@@ -245,13 +253,17 @@ app.post("/api/auth/login", async (req, res) => {
 
   // Fallback: Supabase Auth credential validation
   let supabaseMatched = false;
-  if (supabase && (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash))) {
+  if (supabase) {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: user?.email || identifier,
-        password,
-      });
-      if (!error && data.user) {
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email: user?.email || identifier,
+          password,
+        }),
+        SUPABASE_TIMEOUT_MS,
+        "supabase signIn"
+      ) as any;
+      if (!error && data?.user) {
         supabaseMatched = true;
       }
     } catch (e: any) {
@@ -265,9 +277,13 @@ app.post("/api/auth/login", async (req, res) => {
 
   // Auto-create local user from Supabase if missing
   let adminEmail = (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase().trim();
-  if (!user && supabaseMatched) {
+  if (!user && supabaseMatched && supabase) {
     try {
-      const { data: list } = await supabase.auth.admin.listUsers();
+      const { data: list } = await withTimeout(
+        supabase.auth.admin.listUsers(),
+        SUPABASE_TIMEOUT_MS,
+        "supabase listUsers"
+      ) as any;
       const found = list?.users?.find((u: any) => u.email?.toLowerCase() === identifier.toLowerCase());
       const id = found?.id || generateId("user");
       const newUser: User = {
@@ -290,8 +306,12 @@ app.post("/api/auth/login", async (req, res) => {
     }
   }
 
+  if (!user) {
+    return res.status(401).json({ success: false, error: "Identifiants invalides." });
+  }
+
   // Auto-promote configured admin email to admin role
-  adminEmail = adminEmail || (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase().trim();
+  adminEmail = (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase().trim();
   if (adminEmail && user.email.toLowerCase() === adminEmail && user.role !== "admin") {
     user.role = "admin";
     writeDB(db);
@@ -299,12 +319,20 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   if (supabase) {
-    const { error } = await supabase.auth.admin.generateLink({
-      type: "magiclink",
-      email: user.email,
-      options: { redirectTo: `${req.headers.origin || ""}/auth/callback` },
-    });
-    if (error) console.warn("[Agora] generate magiclink on login failed", error.message);
+    try {
+      const { error } = await withTimeout(
+        supabase.auth.admin.generateLink({
+          type: "magiclink",
+          email: user.email,
+          options: { redirectTo: `${req.headers.origin || ""}/auth/callback` },
+        }),
+        SUPABASE_TIMEOUT_MS,
+        "supabase generateLink"
+      ) as any;
+      if (error) console.warn("[Agora] generate magiclink on login failed", error.message);
+    } catch (e: any) {
+      console.warn("[Agora] generateLink on login failed", e?.message || e);
+    }
   }
 
   addLog("success", `Connexion : ${user.username}`, "Authentification");
@@ -727,9 +755,6 @@ async function callLLM(prompt: string, model: string = "gemini-1.5-flash"): Prom
   return callLLMWithFallback(prompt);
 }
 
-// Deprecated direct GoogleGenAI — kept inactive; use callLLM instead
-const _genAI = new GoogleGenAI({ apiKey: "" });
-
 function routeModel(modelName: string): { provider: string; model: string } {
   if (modelName.startsWith("gemini")) return { provider: "google", model: modelName };
   if (modelName.startsWith("claude")) return { provider: "anthropic", model: modelName };
@@ -875,11 +900,11 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
 });
 
 // -----------------------------------------------------------------
-// VITE DEV MODE / PRODUCTION STATIC
+// VITE DEV MODE / PRODUCTION STATIC — only for local server.ts, never Vercel
 // -----------------------------------------------------------------
 
-(async () => {
-  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === undefined) {
+if (process.env.NODE_ENV === "development" && !process.env.VERCEL) {
+  (async () => {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "custom",
@@ -888,17 +913,17 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
     app.listen(PORT, () => {
       console.log(`[Agora] Dev server running on http://localhost:${PORT}`);
     });
-  } else if (!process.env.VERCEL) {
-    app.use(express.static(path.join(process.cwd(), "dist")));
-    app.get("*", (req, res) => {
-      if (req.path.startsWith("/api/")) return;
-      res.sendFile(path.join(process.cwd(), "dist", "index.html"));
-    });
-    app.listen(PORT, () => {
-      console.log(`[Agora] Server running on http://localhost:${PORT}`);
-    });
-  }
-})();
+  })();
+} else if (!process.env.VERCEL) {
+  app.use(express.static(path.join(process.cwd(), "dist")));
+  app.get("*", (req, res) => {
+    if (req.path.startsWith("/api/")) return;
+    res.sendFile(path.join(process.cwd(), "dist", "index.html"));
+  });
+  app.listen(PORT, () => {
+    console.log(`[Agora] Server running on http://localhost:${PORT}`);
+  });
+}
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
