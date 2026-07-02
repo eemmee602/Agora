@@ -240,17 +240,33 @@ app.post("/api/auth/register", async (req, res) => {
 
   let supabaseUserId: string | undefined;
   if (supabase) {
-    const { data, error } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { username, role: "user" },
-    });
-    if (error) {
-      console.error("[Agora] Supabase createUser error", error);
-      return res.status(500).json({ success: false, error: error.message });
+    try {
+      const result = await Promise.race([
+        supabase.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { username, role: "user" },
+        }),
+        new Promise(resolve => setTimeout(() => resolve("timeout"), 5000))
+      ]);
+      if (result === "timeout") {
+        console.warn("[Agora] createUser Supabase timeout, continuing local-only");
+      } else {
+        const { data, error } = result as any;
+        if (error) {
+          console.error("[Agora] Supabase createUser error", error);
+          // Continue locally if error is not a hard conflict
+          if (error.message?.toLowerCase().includes("already")) {
+            return res.status(409).json({ success: false, error: error.message });
+          }
+        } else {
+          supabaseUserId = data?.user?.id;
+        }
+      }
+    } catch (e: any) {
+      console.error("[Agora] Supabase createUser exception", e?.message || e);
     }
-    supabaseUserId = data.user?.id;
   }
 
   const newUser: User = {

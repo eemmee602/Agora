@@ -362,17 +362,28 @@ app.post("/api/auth/register", async (req, res) => {
 
   let supabaseUserId: string | undefined;
   if (supabase) {
-    const { data, error } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { username, role: "user" },
-    });
-    if (error) {
-      console.error("[Agora] Supabase createUser error", error);
-      return res.status(500).json({ success: false, error: error.message });
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { username, role: "user" },
+        }),
+        SUPABASE_TIMEOUT_MS,
+        "supabase createUser"
+      ) as any;
+      if (error) {
+        console.error("[Agora] Supabase createUser error", error);
+        if (!error.message?.toLowerCase()?.includes("timeout")) {
+          return res.status(500).json({ success: false, error: error.message });
+        }
+      } else {
+        supabaseUserId = data?.user?.id;
+      }
+    } catch (e: any) {
+      console.error("[Agora] Supabase createUser exception", e?.message || e);
     }
-    supabaseUserId = data.user?.id;
   }
 
   const adminEmail = (process.env.ADMIN_EMAIL || "").toLowerCase().trim();
