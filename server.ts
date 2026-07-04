@@ -341,6 +341,49 @@ app.post("/api/auth/magic", async (req, res) => {
   return res.json({ success: true, message: "Lien magique envoye. Verifie tes courriels." });
 });
 
+app.post("/api/auth/magic-callback", async (req, res) => {
+  const { supabaseToken } = req.body;
+  if (!supabaseToken) {
+    return res.status(400).json({ success: false, error: "Token Supabase manquant." });
+  }
+  if (!supabase) {
+    return res.status(503).json({ success: false, error: "Supabase non configure." });
+  }
+
+  const { data: { user: sbUser }, error } = await supabase.auth.getUser(supabaseToken);
+  if (error || !sbUser || !sbUser.email) {
+    console.error("[Agora] magic-callback invalid Supabase token", error?.message);
+    return res.status(401).json({ success: false, error: "Token magique invalide ou expire." });
+  }
+
+  const email = sbUser.email.trim().toLowerCase();
+  const db = readDB();
+  let user = db.users.find(u => u.email.toLowerCase() === email);
+
+  if (!user) {
+    const metadata = sbUser.user_metadata || {};
+    const username = (metadata.username || email.split("@")[0]).trim();
+    const isAdmin = email === (process.env.ADMIN_EMAIL || "egirouxlafontaine@gmail.com").toLowerCase();
+    user = {
+      id: sbUser.id,
+      username,
+      email,
+      role: isAdmin ? "admin" : "user",
+      quotaLimit: 250,
+      quotaUsed: 0,
+      apiKeys: [],
+      createdAt: new Date().toISOString(),
+    };
+    db.users.push(user);
+    writeDB(db);
+    addLog("success", `Nouveau compte magic link : ${user.username}`, "Authentification");
+  }
+
+  const token = signToken(user);
+  addLog("success", `Connexion magic link : ${user.username}`, "Authentification");
+  return res.json({ success: true, token, user: sanitizeUser(user) });
+});
+
 app.post("/api/auth/logout", authMiddleware, async (req, res) => {
   if (supabase && req.user?.supabaseId) {
     await supabase.auth.admin.signOut(req.user.supabaseId);

@@ -47,6 +47,37 @@ export default function App() {
         console.error("Error parsing cached session user", err);
       }
     }
+
+    // Handle Supabase magic-link callback hash (#access_token=...)
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token")) {
+      const params = new URLSearchParams(hash.replace(/^#/, ""));
+      const accessToken = params.get("access_token");
+      const type = params.get("type");
+      if (accessToken && type === "magiclink") {
+        fetch(`${import.meta.env.VITE_API_BASE || "/api"}/auth/magic-callback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ supabaseToken: accessToken }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.success && data.user) {
+              sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+              if (data.token) sessionStorage.setItem("agora_token", data.token);
+              setCurrentUser(data.user);
+              window.history.replaceState(null, "", window.location.pathname + window.location.search);
+            } else {
+              console.error("[Agora] magic-callback failed", data.error);
+              alert("Lien magique invalide ou expire. Recommence.");
+            }
+          })
+          .catch((err) => {
+            console.error("[Agora] magic-callback error", err);
+            alert("Erreur lors de la connexion par lien magique.");
+          });
+      }
+    }
   }, []);
 
   // Sync core loops when currentUser is set
