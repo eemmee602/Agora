@@ -17,7 +17,7 @@ async function callGoogle(prompt: string): Promise<string> {
   const client = getGoogleClient();
   if (!client) throw new Error("Google key missing");
   const result = await client.models.generateContent({
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash",
     contents: prompt,
   });
   const text = result.text;
@@ -89,7 +89,7 @@ async function callCohere(prompt: string): Promise<string> {
       "Authorization": `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: "command-r-plus",
+      model: "command-r7b-12-2024",
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -105,10 +105,10 @@ async function callCohere(prompt: string): Promise<string> {
 
 export async function callLLMWithFallback(prompt: string): Promise<{ text: string; provider: string }> {
   const providers: ProviderConfig[] = [
-    { name: "google", key: process.env.GOOGLE_API_KEY, model: "gemini-1.5-flash", call: callGoogle },
+    { name: "google", key: process.env.GOOGLE_API_KEY, model: "gemini-2.5-flash", call: callGoogle },
     { name: "openrouter", key: process.env.OPENROUTER_API_KEY, model: "google/gemini-2.5-flash-preview:thinking", call: callOpenRouter },
     { name: "mistral", key: process.env.MISTRAL_API_KEY, model: "mistral-small-latest", call: callMistral },
-    { name: "cohere", key: process.env.COHERE_API_KEY, model: "command-r-plus", call: callCohere },
+    { name: "cohere", key: process.env.COHERE_API_KEY, model: "command-r7b-12-2024", call: callCohere },
   ];
 
   let lastError: Error | null = null;
