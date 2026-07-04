@@ -19,11 +19,6 @@
       ]
     }
   ],
-  "functions": {
-    "api/handler.ts": {
-      "maxDuration": 30
-    }
-  },
   "builds": [
     {
       "src": "api/handler.ts",
