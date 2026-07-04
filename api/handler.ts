@@ -159,6 +159,9 @@ interface MessageAttachment {
 interface ChatMessage {
   id: string;
   sender: "user" | "ai";
+  senderId?: string;
+  senderName?: string;
+  senderRole?: "user" | "agent" | "system";
   content: string;
   steps?: MessageStep[];
   attachments?: MessageAttachment[];
@@ -857,6 +860,9 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
   const userMessage: ChatMessage = {
     id: generateId("msg"),
     sender: "user",
+    senderId: user.id,
+    senderName: user.username,
+    senderRole: "user",
     content,
     attachments,
     timestamp: new Date().toISOString(),
@@ -896,6 +902,9 @@ app.post("/api/chats/:id/messages", authMiddleware, async (req: any, res) => {
   const aiMessage: ChatMessage = {
     id: generateId("msg"),
     sender: "ai",
+    senderId: "agent-architect",
+    senderName: "Agora Agents A∀",
+    senderRole: "agent",
     content: "",
     steps,
     timestamp: new Date().toISOString(),

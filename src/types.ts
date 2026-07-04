@@ -51,6 +51,7 @@ export interface MessageAttachment {
 
 export interface Message {
   id: string;
+  sender?: "user" | "ai";
   senderId: string;
   senderName: string;
   senderRole: "user" | "agent" | "system";

@@ -67,10 +67,11 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
           <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-xl font-bold text-white shadow-lg shadow-indigo-600/20 mx-auto mb-4">
             A∀
           </div>
-          <h1 className="text-2xl font-display font-bold text-white tracking-tight">Agora Ai</h1>
+          <h1 className="text-2xl font-display font-bold text-white tracking-tight">Agora AI</h1>
           <p className="text-xs text-gray-400 mt-1.5 leading-normal">
             Hub collaboratif d'agents d'intelligence artificielle spécialisés.
           </p>
+          <p className="text-[10px] text-indigo-400/80 mt-2 font-medium tracking-wide">Se connecter</p>
         </div>
 
         {authError && (

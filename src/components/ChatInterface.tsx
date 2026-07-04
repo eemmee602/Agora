@@ -657,10 +657,10 @@ export default function ChatInterface({
         {/* Messages list or Empty state welcome */}
         <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden p-3 xs:p-4 md:p-6 space-y-6 relative">
           
-          {activeChat && activeChat.messages.length > 1 ? (
+          {activeChat && activeChat.messages.length > 0 ? (
             <div className="space-y-6">
               {activeChat.messages.filter(m => m.senderRole !== "system").map((msg) => {
-                const isUser = msg.senderRole === "user";
+                const isUser = msg.senderRole === "user" || (!msg.senderRole && msg.sender === "user");
                 return (
                   <motion.div
                     key={msg.id}
