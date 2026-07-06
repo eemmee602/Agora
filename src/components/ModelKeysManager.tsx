@@ -44,6 +44,104 @@ export default function ModelKeysManager({
 
   const [formError, setFormError] = useState("");
 
+  const providers = [
+    { id: "openrouter", label: "OpenRouter AI Hub" },
+    { id: "google", label: "Google Gemini API" },
+    { id: "openai", label: "OpenAI API" },
+    { id: "anthropic", label: "Anthropic Claude API" },
+    { id: "groq", label: "Groq API" },
+    { id: "cerebras", label: "Cerebras API" },
+    { id: "together", label: "Together AI" },
+    { id: "mistral", label: "Mistral AI" },
+    { id: "ai21", label: "AI21 Studio" },
+    { id: "cohere", label: "Cohere API" },
+    { id: "xai", label: "xAI Grok API" },
+    { id: "perplexity", label: "Perplexity API" },
+    { id: "deepseek", label: "DeepSeek API" },
+    { id: "openai-compatible", label: "OpenAI Compatible (URL custom)" }
+  ];
+
+  const modelOptions: Record<string, { value: string; label: string }[]> = {
+    openrouter: [
+      { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash (Recommandé)" },
+      { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro (Haute Précision)" },
+      { value: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B Instruct" },
+      { value: "anthropic/claude-3-5-sonnet", label: "Claude 3.5 Sonnet" },
+      { value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
+      { value: "deepseek/deepseek-chat", label: "DeepSeek V3" },
+      { value: "xai/grok-2", label: "Grok 2" },
+      { value: "perplexity/sonar", label: "Perplexity Sonar" }
+    ],
+    google: [
+      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+      { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" }
+    ],
+    openai: [
+      { value: "gpt-4o", label: "GPT-4o" },
+      { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+      { value: "gpt-4-turbo", label: "GPT-4 Turbo" }
+    ],
+    anthropic: [
+      { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
+      { value: "claude-3-opus-20240229", label: "Claude 3 Opus" },
+      { value: "claude-3-haiku-20240307", label: "Claude 3 Haiku" }
+    ],
+    groq: [
+      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B Versatile" },
+      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B Instant" },
+      { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B" }
+    ],
+    cerebras: [
+      { value: "llama-3.1-8b", label: "Llama 3.1 8B" },
+      { value: "llama-3.3-70b", label: "Llama 3.3 70B" }
+    ],
+    together: [
+      { value: "meta-llama/Llama-3.3-70B-Instruct-Turbo", label: "Llama 3.3 70B Instruct Turbo" },
+      { value: "mistralai/Mixtral-8x7B-Instruct-v0.1", label: "Mixtral 8x7B" },
+      { value: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen 2.5 72B" }
+    ],
+    mistral: [
+      { value: "mistral-large-latest", label: "Mistral Large" },
+      { value: "mistral-medium-latest", label: "Mistral Medium" },
+      { value: "pixtral-large-latest", label: "Pixtral Large" }
+    ],
+    ai21: [
+      { value: "jamba-1.5-large", label: "Jamba 1.5 Large" },
+      { value: "jamba-1.5-mini", label: "Jamba 1.5 Mini" }
+    ],
+    cohere: [
+      { value: "command-r-plus", label: "Command R+" },
+      { value: "command-r", label: "Command R" }
+    ],
+    xai: [
+      { value: "grok-2-latest", label: "Grok 2" },
+      { value: "grok-2-mini", label: "Grok 2 Mini" }
+    ],
+    perplexity: [
+      { value: "sonar", label: "Sonar" },
+      { value: "sonar-pro", label: "Sonar Pro" },
+      { value: "sonar-reasoning", label: "Sonar Reasoning" }
+    ],
+    deepseek: [
+      { value: "deepseek-chat", label: "DeepSeek V3" },
+      { value: "deepseek-reasoner", label: "DeepSeek R1" }
+    ],
+    "openai-compatible": [
+      { value: "custom-model", label: "Modèle custom (URL custom côté backend)" }
+    ]
+  };
+
+  const currentModels = modelOptions[provider] || modelOptions.openrouter;
+
+  React.useEffect(() => {
+    // Reset model to first option of new provider when provider changes
+    const opts = modelOptions[provider];
+    if (opts && opts.length > 0 && !opts.some(o => o.value === model)) {
+      setModel(opts[0].value);
+    }
+  }, [provider]);
+
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
@@ -136,9 +234,9 @@ export default function ModelKeysManager({
                       onChange={(e) => setProvider(e.target.value)}
                       className="text-base md:text-xs px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-indigo-500/50 backdrop-blur-sm"
                     >
-                      <option value="openrouter">OpenRouter AI Hub</option>
-                      <option value="google">Google Gemini API</option>
-                      <option value="openai">OpenAI API</option>
+                      {providers.map(p => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -163,19 +261,9 @@ export default function ModelKeysManager({
                       onChange={(e) => setModel(e.target.value)}
                       className="text-base md:text-xs px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-indigo-500/50 backdrop-blur-sm"
                     >
-                      {provider === "openrouter" ? (
-                        <>
-                          <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (Recommandé)</option>
-                          <option value="google/gemini-2.5-pro">Gemini 2.5 Pro (Haute Précision)</option>
-                          <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B Instruct</option>
-                          <option value="anthropic/claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                          <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                        </>
-                      )}
+                      {currentModels.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>

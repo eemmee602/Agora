@@ -921,7 +921,9 @@ export default function ChatInterface({
         </AnimatePresence>
 
         {/* Dynamic expanding bottom input form with glassmorphism and attachments */}
-        <div className="px-4 py-3 md:px-6 md:py-4 border-t border-white/10 bg-[#070b13]/65 backdrop-blur-md z-10 shrink-0">
+        <div className="px-4 py-4 md:px-6 md:py-5 border-t border-white/10 bg-[#070b13] z-10 shrink-0 relative">
+          {/* Extra opaque cover strip to prevent any white gap below */}
+          <div className="absolute left-0 right-0 bottom-0 h-12 bg-[#070b13] z-[-1]" />
           
           {/* File input helpers */}
           <input
