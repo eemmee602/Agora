@@ -992,7 +992,7 @@ export default function ChatInterface({
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Discutez avec les agents Agora AI..."
-                className="w-full text-base md:text-sm px-4 py-3 bg-transparent border-0 text-white placeholder-gray-500 focus:outline-none focus:ring-0 expanding-textarea"
+                className="w-full text-base md:text-sm px-4 py-3 bg-black/60 border-0 text-white placeholder-gray-500 focus:outline-none focus:ring-0 expanding-textarea"
                 disabled={isProcessing}
               />
             </div>

@@ -1154,6 +1154,20 @@ Sois concis, chaleureux, structuré et professionnel.`;
   try {
     if (activeUserKey && activeUserKey.key) {
       modelUsed = activeUserKey.model || modelUsed;
+      // Normalize model id for OpenRouter/OpenAI providers
+      if (activeUserKey.provider === "openrouter" || activeUserKey.provider === "openai") {
+        const modelLower = modelUsed.toLowerCase();
+        if (!modelUsed.includes("/")) {
+          // User likely picked a Gemini model id without the OpenRouter prefix
+          if (modelLower.startsWith("gemini")) {
+            modelUsed = `google/${modelUsed}`;
+          } else if (modelLower.startsWith("llama")) {
+            modelUsed = `meta-llama/${modelUsed}`;
+          } else if (modelLower.startsWith("claude")) {
+            modelUsed = `anthropic/${modelUsed}`;
+          }
+        }
+      }
       actualModelUsed = modelUsed;
       addLog("info", `Utilisation de la clé API client (${activeUserKey.name}) avec le modèle ${modelUsed}.`, "Passerelle API");
       
@@ -1164,7 +1178,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${activeUserKey.key}`
+              "Authorization": `Bearer ${activeUserKey.key}`,
+              "HTTP-Referer": "https://agora-ai-hub-v2.vercel.app",
+              "X-Title": "Agora AI Hub"
             },
             body: JSON.stringify({
               model: modelUsed,
