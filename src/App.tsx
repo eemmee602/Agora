@@ -5,7 +5,7 @@ import {
   Terminal, Globe, Sparkles, CheckCircle, RefreshCw, Server
 } from "lucide-react";
 
-import { User, Agent, Chat, SystemLog, safeFormatTime } from "./types";
+import { User, Agent, Chat, Message, SystemLog, safeFormatTime } from "./types";
 import AuthScreen from "./components/AuthScreen";
 import ChatInterface from "./components/ChatInterface";
 import AgentTree from "./components/AgentTree";
@@ -45,37 +45,6 @@ export default function App() {
         setCurrentUser(parsed);
       } catch (err) {
         console.error("Error parsing cached session user", err);
-      }
-    }
-
-    // Handle Supabase magic-link callback hash (#access_token=...)
-    const hash = window.location.hash;
-    if (hash && hash.includes("access_token")) {
-      const params = new URLSearchParams(hash.replace(/^#/, ""));
-      const accessToken = params.get("access_token");
-      const type = params.get("type");
-      if (accessToken && type === "magiclink") {
-        fetch(`${import.meta.env.VITE_API_BASE || "/api"}/auth/magic-callback`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ supabaseToken: accessToken }),
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            if (data.success && data.user) {
-              sessionStorage.setItem("agora_user", JSON.stringify(data.user));
-              if (data.token) sessionStorage.setItem("agora_token", data.token);
-              setCurrentUser(data.user);
-              window.history.replaceState(null, "", window.location.pathname + window.location.search);
-            } else {
-              console.error("[Agora] magic-callback failed", data.error);
-              alert("Lien magique invalide ou expire. Recommence.");
-            }
-          })
-          .catch((err) => {
-            console.error("[Agora] magic-callback error", err);
-            alert("Erreur lors de la connexion par lien magique.");
-          });
       }
     }
   }, []);
@@ -170,16 +139,10 @@ export default function App() {
     }
   };
 
-  const authHeaders = (extra: HeadersInit = {}): HeadersInit => {
-    const token = currentUser?.token;
-    if (!token) return { ...extra };
-    return { ...extra, Authorization: `Bearer ${token}` };
-  };
-
   const fetchUserChats = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`/api/chats?userId=${currentUser.id}`, { headers: authHeaders() });
+      const res = await fetch(`/api/chats?userId=${currentUser.id}`);
       if (res.ok) {
         const data = await res.json();
         setChats(data);
@@ -194,7 +157,7 @@ export default function App() {
 
   const fetchAgents = async () => {
     try {
-      const res = await fetch("/api/agents", { headers: authHeaders() });
+      const res = await fetch("/api/agents");
       if (res.ok) {
         const data = await res.json();
         setAgents(data);
@@ -207,7 +170,7 @@ export default function App() {
   // Admin: Fetch logs
   const fetchAdminLogs = async () => {
     try {
-      const res = await fetch("/api/logs", { headers: authHeaders() });
+      const res = await fetch("/api/logs");
       if (res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -220,16 +183,15 @@ export default function App() {
   // Admin: Fetch all users
   const fetchUsersList = async () => {
     try {
-      const res = await fetch("/api/admin/users", { headers: authHeaders() });
+      const res = await fetch("/api/admin/users");
       if (res.ok) {
         const data = await res.json();
         setUsers(data);
         // Keep current user updated with dynamic quota changes
         const currentUpdated = data.find((u: User) => u.id === currentUser?.id);
         if (currentUpdated) {
-          const updated = { ...currentUser, ...currentUpdated };
-          setCurrentUser(updated);
-          sessionStorage.setItem("agora_user", JSON.stringify(updated));
+          setCurrentUser(currentUpdated);
+          sessionStorage.setItem("agora_user", JSON.stringify(currentUpdated));
         }
       }
     } catch (err: any) {
@@ -240,7 +202,7 @@ export default function App() {
   // Admin: Fetch all chats histories
   const fetchAdminChats = async () => {
     try {
-      const res = await fetch("/api/admin/chats", { headers: authHeaders() });
+      const res = await fetch("/api/admin/chats");
       if (res.ok) {
         const data = await res.json();
         // Set all chats if admin wants to audit globally
@@ -266,7 +228,7 @@ export default function App() {
     try {
       const res = await fetch("/api/chats", {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: currentUser.id,
           userName: currentUser.username,
@@ -287,8 +249,7 @@ export default function App() {
   const handleDeleteChat = async (chatId: string) => {
     try {
       const res = await fetch(`/api/chats/${chatId}`, {
-        method: "DELETE",
-        headers: authHeaders()
+        method: "DELETE"
       });
       if (res.ok) {
         setChats(prev => prev.filter(c => c.id !== chatId));
@@ -305,8 +266,8 @@ export default function App() {
   const handleUpdateChat = async (chatId: string, updates: Partial<Chat>) => {
     try {
       const res = await fetch(`/api/chats/${chatId}`, {
-        method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updates)
       });
       if (res.ok) {
@@ -327,8 +288,7 @@ export default function App() {
     // Keep track of the text we are trying to send in case we need to retry later
     lastSentContentRef.current = content;
 
-    // Immediately append user's message locally to the chat UI
-    const tempUserMsg = {
+    const tempUserMsg: Message = {
       id: `temp-usr-${Date.now()}`,
       senderId: currentUser.id,
       senderName: currentUser.username,
@@ -356,7 +316,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/chats/${activeChat.id}/messages`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           senderId: currentUser.id,
           senderName: currentUser.username,
@@ -367,119 +327,103 @@ export default function App() {
       });
 
       if (res.ok) {
-        const contentType = res.headers.get("content-type") || "";
-        // Backend may return a plain JSON response (non-streaming) or an NDJSON stream
-        if (!contentType.includes("application/x-ndjson") && !res.body) {
+        // Read the NDJSON response stream!
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder("utf-8");
+        
+        if (!reader) {
           throw new Error("Le flux de réponse n'est pas supporté par votre navigateur.");
         }
 
-        if (contentType.includes("application/x-ndjson")) {
-          // Read the NDJSON response stream!
-          const reader = res.body!.getReader();
-          const decoder = new TextDecoder("utf-8");
+        // Initialize a temporary AI message in the active chat so it types in real-time
+        const aiMessageId = `msg-${Date.now()}-ai-streaming`;
+        const tempAiMsg: Message = {
+          id: aiMessageId,
+          senderId: "agent-architect",
+          senderName: "Agora Agents A∀",
+          senderRole: "agent",
+          content: "",
+          timestamp: new Date().toISOString(),
+          steps: [],
+          actualModelUsed: "Orchestrateur Agora"
+        };
 
-          // Initialize a temporary AI message in the active chat so it types in real-time
-          const aiMessageId = `msg-${Date.now()}-ai-streaming`;
-          const tempAiMsg: any = {
-            id: aiMessageId,
-            senderId: "agent-architect",
-            senderName: "Agora Agents A∀",
-            senderRole: "agent",
-            content: "",
-            timestamp: new Date().toISOString(),
-            steps: [],
-            actualModelUsed: "Orchestrateur Agora"
-          };
+        // Append this streaming message to the active chat initially
+        let currentChatWithStreaming = {
+          ...updatedActiveChat,
+          messages: [...updatedActiveChat.messages, tempAiMsg]
+        };
+        setActiveChat(currentChatWithStreaming);
+        setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
 
-          // Append this streaming message to the active chat initially
-          let currentChatWithStreaming = {
-            ...updatedActiveChat,
-            messages: [...updatedActiveChat.messages, tempAiMsg]
-          };
-          setActiveChat(currentChatWithStreaming);
-          setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
+        let buffer = "";
+        let finalData: any = null;
 
-          let buffer = "";
-          let finalData: any = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          
+          // Split by newlines (NDJSON format)
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // keep the last partial line in buffer
 
-            buffer += decoder.decode(value, { stream: true });
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
 
-            // Split by newlines (NDJSON format)
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || ""; // keep the last partial line in buffer
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-
-              try {
-                const parsed = JSON.parse(trimmed);
-                if (parsed.type === "step") {
-                  // An agent step completed! Update steps in our streaming message
-                  tempAiMsg.steps = [...tempAiMsg.steps, parsed.step];
-                  if (parsed.step.codeBlock) {
-                    // If it's a code generation step, we can also link codeFiles
-                    if (!tempAiMsg.codeFiles) tempAiMsg.codeFiles = [];
-                    // check if already added
-                    if (!tempAiMsg.codeFiles.some((f: any) => f.fileName === parsed.step.codeBlock.fileName)) {
-                      tempAiMsg.codeFiles.push(parsed.step.codeBlock);
-                    }
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed.type === "step") {
+                // An agent step completed! Update steps in our streaming message
+                tempAiMsg.steps = [...tempAiMsg.steps, parsed.step];
+                if (parsed.step.codeBlock) {
+                  // If it's a code generation step, we can also link codeFiles
+                  if (!tempAiMsg.codeFiles) tempAiMsg.codeFiles = [];
+                  // check if already added
+                  if (!tempAiMsg.codeFiles.some((f: any) => f.fileName === parsed.step.codeBlock.fileName)) {
+                    tempAiMsg.codeFiles.push(parsed.step.codeBlock);
                   }
-
-                  currentChatWithStreaming = {
-                    ...updatedActiveChat,
-                    messages: [...updatedActiveChat.messages, { ...tempAiMsg }]
-                  };
-                  setActiveChat(currentChatWithStreaming);
-                  setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
-                } else if (parsed.type === "chunk") {
-                  // A text chunk generated! Append to content
-                  tempAiMsg.content += parsed.text;
-
-                  currentChatWithStreaming = {
-                    ...updatedActiveChat,
-                    messages: [...updatedActiveChat.messages, { ...tempAiMsg }]
-                  };
-                  setActiveChat(currentChatWithStreaming);
-                  setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
-                } else if (parsed.type === "done") {
-                  // Final full chat object and quota details
-                  finalData = parsed;
                 }
-              } catch (err) {
-                console.warn("Error parsing stream line:", err, trimmed);
+                
+                currentChatWithStreaming = {
+                  ...updatedActiveChat,
+                  messages: [...updatedActiveChat.messages, { ...tempAiMsg }]
+                };
+                setActiveChat(currentChatWithStreaming);
+                setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
+              } else if (parsed.type === "chunk") {
+                // A text chunk generated! Append to content
+                tempAiMsg.content += parsed.text;
+                
+                currentChatWithStreaming = {
+                  ...updatedActiveChat,
+                  messages: [...updatedActiveChat.messages, { ...tempAiMsg }]
+                };
+                setActiveChat(currentChatWithStreaming);
+                setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
+              } else if (parsed.type === "done") {
+                // Final full chat object and quota details
+                finalData = parsed;
               }
+            } catch (err) {
+              console.warn("Error parsing stream line:", err, trimmed);
             }
           }
+        }
 
-          // Processing finished! If we got the final done message, apply the final complete state
-          if (finalData && finalData.chat) {
-            setActiveChat(finalData.chat);
-            setChats(prev => prev.map(c => c.id === finalData.chat.id ? finalData.chat : c));
-
-            const updatedUser = { ...currentUser, quotaUsed: finalData.quotaUsed };
-            setCurrentUser(updatedUser);
-            sessionStorage.setItem("agora_user", JSON.stringify(updatedUser));
-          } else {
-            // Fallback: reload chats if final complete state wasn't successfully decoded
-            await fetchUserChats();
-          }
+        // Processing finished! If we got the final done message, apply the final complete state
+        if (finalData && finalData.chat) {
+          setActiveChat(finalData.chat);
+          setChats(prev => prev.map(c => c.id === finalData.chat.id ? finalData.chat : c));
+          
+          const updatedUser = { ...currentUser, quotaUsed: finalData.quotaUsed };
+          setCurrentUser(updatedUser);
+          sessionStorage.setItem("agora_user", JSON.stringify(updatedUser));
         } else {
-          // Plain JSON response from non-streaming backend
-          const data = await res.json();
-          if (data.success && data.chat) {
-            setActiveChat(data.chat);
-            setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
-            const updatedUser = { ...currentUser, quotaUsed: data.quotaUsed };
-            setCurrentUser(updatedUser);
-            sessionStorage.setItem("agora_user", JSON.stringify(updatedUser));
-          } else {
-            setModelError(data.error || "Une erreur s'est produite lors de l'orchestration des agents.");
-          }
+          // Fallback: reload chats if final complete state wasn't successfully decoded
+          await fetchUserChats();
         }
       } else {
         const errorData = await res.json();
@@ -535,14 +479,13 @@ export default function App() {
     try {
       const res = await fetch(`/api/users/${currentUser.id}/keys`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, provider, key, model })
       });
       if (res.ok) {
         const data = await res.json();
-        const updated = { ...currentUser, ...data.user };
-        setCurrentUser(updated);
-        sessionStorage.setItem("agora_user", JSON.stringify(updated));
+        setCurrentUser(data.user);
+        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast(`Clé API ${provider.toUpperCase()} activée avec succès !`);
       }
     } catch (err) {
@@ -554,14 +497,12 @@ export default function App() {
     if (!currentUser) return;
     try {
       const res = await fetch(`/api/users/${currentUser.id}/keys/${keyId}`, {
-        method: "DELETE",
-        headers: authHeaders()
+        method: "DELETE"
       });
       if (res.ok) {
         const data = await res.json();
-        const updated = { ...currentUser, ...data.user };
-        setCurrentUser(updated);
-        sessionStorage.setItem("agora_user", JSON.stringify(updated));
+        setCurrentUser(data.user);
+        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast("Clé API retirée.");
       }
     } catch (err) {
@@ -575,14 +516,13 @@ export default function App() {
     try {
       const res = await fetch(`/api/users/${currentUser.id}/preferences`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ memory, preferences })
       });
       if (res.ok) {
         const data = await res.json();
-        const updated = { ...currentUser, ...data.user };
-        setCurrentUser(updated);
-        sessionStorage.setItem("agora_user", JSON.stringify(updated));
+        setCurrentUser(data.user);
+        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast("Mémoire et préférences de l'IA synchronisées !");
       }
     } catch (err) {
@@ -595,7 +535,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/agents/${agentId}/skill`, {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ skill })
       });
       if (res.ok) {
@@ -612,7 +552,7 @@ export default function App() {
     try {
       const res = await fetch("/api/admin/users/quota", {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, quotaLimit: newQuota })
       });
       if (res.ok) {
@@ -628,8 +568,7 @@ export default function App() {
     if (confirm("Voulez-vous vraiment supprimer ce membre définitivement de la base Agora ?")) {
       try {
         const res = await fetch(`/api/admin/users/${userId}`, {
-          method: "DELETE",
-          headers: authHeaders()
+          method: "DELETE"
         });
         if (res.ok) {
           showToast("Compte membre supprimé définitivement.");
@@ -644,8 +583,7 @@ export default function App() {
   const handleResetAgents = async () => {
     try {
       const res = await fetch("/api/admin/agents/reset", {
-        method: "POST",
-        headers: authHeaders()
+        method: "POST"
       });
       if (res.ok) {
         showToast("Tous les pipelines d'agents ont été réinitialisés.");
@@ -657,15 +595,7 @@ export default function App() {
   };
 
   // Logout
-  const handleLogout = async () => {
-    try {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-        headers: authHeaders()
-      });
-    } catch (e) {
-      console.warn("[Agora] logout call failed", e);
-    }
+  const handleLogout = () => {
     setCurrentUser(null);
     sessionStorage.removeItem("agora_user");
     setChats([]);

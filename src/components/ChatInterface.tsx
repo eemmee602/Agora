@@ -657,10 +657,10 @@ export default function ChatInterface({
         {/* Messages list or Empty state welcome */}
         <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden p-3 xs:p-4 md:p-6 space-y-6 relative">
           
-          {activeChat && activeChat.messages.length > 0 ? (
+          {activeChat && activeChat.messages.length > 1 ? (
             <div className="space-y-6">
               {activeChat.messages.filter(m => m.senderRole !== "system").map((msg) => {
-                const isUser = msg.senderRole === "user" || (!msg.senderRole && msg.sender === "user");
+                const isUser = msg.senderRole === "user";
                 return (
                   <motion.div
                     key={msg.id}
@@ -992,8 +992,7 @@ export default function ChatInterface({
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Discutez avec les agents Agora AI..."
-                className="w-full text-base md:text-sm px-4 py-3 bg-[#0a0f1a]/90 border-0 text-white placeholder-gray-500 focus:outline-none focus:ring-0 expanding-textarea rounded-lg"
-                style={{ backgroundColor: '#0a0f1a' }}
+                className="w-full text-base md:text-sm px-4 py-3 bg-transparent border-0 text-white placeholder-gray-500 focus:outline-none focus:ring-0 expanding-textarea"
                 disabled={isProcessing}
               />
             </div>

@@ -3,6 +3,5 @@ dist
 data/db.json
 .env
 .env.local
+.DS_Store
 *.log
-.vercel
-.env*

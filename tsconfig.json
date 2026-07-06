@@ -22,15 +22,8 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["node", "vite/client"]
+    "types": ["node", "react", "react-dom", "express", "cors", "@vercel/node"]
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    "server.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["src", "api", "server.ts", "vite.config.ts"],
+  "exclude": ["node_modules", "dist"]
 }
