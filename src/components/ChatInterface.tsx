@@ -962,10 +962,10 @@ export default function ChatInterface({
           )}
 
           <form onSubmit={handleSubmit} className="flex items-end space-x-3">
-            <div className="flex-1 relative rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm shadow-inner overflow-hidden flex flex-col md:flex-row md:items-center">
+            <div className="flex-1 relative rounded-xl border border-white/10 bg-black/80 shadow-inner overflow-hidden flex flex-col md:flex-row md:items-center">
               
               {/* Accessory buttons inside text box */}
-              <div className="flex items-center space-x-1 p-2 border-b md:border-b-0 md:border-r border-white/5">
+              <div className="flex items-center space-x-1 p-2 border-b md:border-b-0 md:border-r border-white/5 bg-black/40">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}

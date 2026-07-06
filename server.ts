@@ -1065,7 +1065,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   let customKeyError = "";
 
   // Check if user has their own API keys registered and active
-  const activeUserKey = user.apiKeys.find(k => k.active);
+  const activeUserKeys = user.apiKeys.filter(k => k.active && k.key && k.key.trim().length > 0);
+  let activeUserKey: any = activeUserKeys[0] || null;
 
   // Check if there are any previous agent messages to suppress repetitive greetings
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
@@ -1152,13 +1153,13 @@ Sois concis, chaleureux, structuré et professionnel.`;
   };
   
   try {
-    if (activeUserKey && activeUserKey.key) {
-      modelUsed = activeUserKey.model || modelUsed;
+    for (const candidateKey of activeUserKeys) {
+      activeUserKey = candidateKey;
+      modelUsed = chat.activeModel || candidateKey.model || "gemini-2.5-flash";
       // Normalize model id for OpenRouter/OpenAI providers
-      if (activeUserKey.provider === "openrouter" || activeUserKey.provider === "openai") {
+      if (candidateKey.provider === "openrouter" || candidateKey.provider === "openai") {
         const modelLower = modelUsed.toLowerCase();
         if (!modelUsed.includes("/")) {
-          // User likely picked a Gemini model id without the OpenRouter prefix
           if (modelLower.startsWith("gemini")) {
             modelUsed = `google/${modelUsed}`;
           } else if (modelLower.startsWith("llama")) {
@@ -1169,16 +1170,16 @@ Sois concis, chaleureux, structuré et professionnel.`;
         }
       }
       actualModelUsed = modelUsed;
-      addLog("info", `Utilisation de la clé API client (${activeUserKey.name}) avec le modèle ${modelUsed}.`, "Passerelle API");
+      addLog("info", `Utilisation de la clé API client (${candidateKey.name}) avec le modèle ${modelUsed}.`, "Passerelle API");
       
       try {
         // Call OpenRouter / Custom provider if configured
-        if (activeUserKey.provider === "openrouter" || activeUserKey.provider === "openai") {
+        if (candidateKey.provider === "openrouter" || candidateKey.provider === "openai") {
           const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${activeUserKey.key}`,
+              "Authorization": `Bearer ${candidateKey.key}`,
               "HTTP-Referer": "https://agora-ai-hub-v2.vercel.app",
               "X-Title": "Agora AI Hub"
             },
@@ -1221,12 +1222,25 @@ Sois concis, chaleureux, structuré et professionnel.`;
                 }
               }
             }
+            // Success: stop trying other keys
+            customKeyError = "";
+            break;
           } else {
-            throw new Error(`Erreur OpenRouter API Status: ${response.status}`);
+            const bodyText = await response.text().catch(() => "");
+            const status = response.status;
+            // Do NOT disable key on transient/payment issues (402/429) — try next key instead
+            if (status === 401 || status === 403) {
+              candidateKey.active = false;
+              writeDB(db);
+              addLog("warning", `Clé API "${candidateKey.name}" désactivée (${status} - invalide).`, "Passerelle API");
+            } else {
+              addLog("warning", `Clé API "${candidateKey.name}" a retourné ${status}. Bascule vers clé suivante.`, "Passerelle API");
+            }
+            throw new Error(`OpenRouter API ${status}: ${bodyText}`);
           }
-        } else if (activeUserKey.provider === "google") {
+        } else if (candidateKey.provider === "google") {
           const userAi = new GoogleGenAI({
-            apiKey: activeUserKey.key,
+            apiKey: candidateKey.key,
             httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
           });
           finalAiResponse = await callGeminiStreamWithRetryAndFallback(
@@ -1236,19 +1250,17 @@ Sois concis, chaleureux, structuré et professionnel.`;
               systemInstruction: systemPrompt,
               temperature: 0.7
             },
-            activeUserKey.model || "gemini-2.5-flash",
+            candidateKey.model || "gemini-2.5-flash",
             onChunk
           );
+          // Success: stop trying other keys
+          customKeyError = "";
+          break;
         }
       } catch (err: any) {
         console.error("Custom user API key failed:", err);
         customKeyError = err.message || "Erreur de connexion";
-        
-        // Disable the faulty key automatically so subsequent messages use working keys or system key
-        activeUserKey.active = false;
-        writeDB(db);
-        
-        addLog("error", `Échec clé client "${activeUserKey.name}" : ${customKeyError}. Clé automatiquement désactivée pour éviter d'interrompre l'interface. Bascule vers le système de secours principal.`, "Agora Gateway");
+        // Don't disable here; try next active key, fallback disables only if all fail.
       }
     }
     
