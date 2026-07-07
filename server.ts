@@ -1011,71 +1011,109 @@ Sois concis, chaleureux, structuré et professionnel.`;
       addLog("info", `Utilisation de la clé API client (${candidateKey.name}) avec le modèle ${modelUsed}.`, "Passerelle API");
       
       try {
-        // Call OpenRouter / Custom provider if configured
-        if (candidateKey.provider === "openrouter" || candidateKey.provider === "openai") {
-          const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${candidateKey.key}`,
-              "HTTP-Referer": "https://agora-ai-hub-v2.vercel.app",
-              "X-Title": "Agora AI Hub"
-            },
-            body: JSON.stringify({
-              model: modelUsed,
-              messages: formattedOpenRouterMessages,
-              stream: true
-            })
-          });
-          
-          if (response.ok && response.body) {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder("utf-8");
-            let buffer = "";
-            
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-              buffer = lines.pop() || "";
-              
-              for (const line of lines) {
-                const cleanLine = line.trim();
-                if (!cleanLine.startsWith("data: ")) continue;
-                
-                const jsonStr = cleanLine.substring(6);
-                if (jsonStr === "[DONE]") break;
-                
-                try {
-                  const parsed = JSON.parse(jsonStr);
-                  const textChunk = parsed.choices?.[0]?.delta?.content || "";
-                  if (textChunk) {
-                    finalAiResponse += textChunk;
-                    onChunk(textChunk);
-                  }
-                } catch (e) {
-                  // Ignore malformed chunks
-                }
-              }
-            }
-            // Success: stop trying other keys
-            customKeyError = "";
-            break;
-          } else {
-            const bodyText = await response.text().catch(() => "");
-            const status = response.status;
-            // Do NOT disable key on transient/payment issues (402/429) — try next key instead
-            if (status === 401 || status === 403) {
-              candidateKey.active = false;
-              writeDB(db);
-              addLog("warning", `Clé API "${candidateKey.name}" désactivée (${status} - invalide).`, "Passerelle API");
-            } else {
-              addLog("warning", `Clé API "${candidateKey.name}" a retourné ${status}. Bascule vers clé suivante.`, "Passerelle API");
-            }
-            throw new Error(`OpenRouter API ${status}: ${bodyText}`);
+        // Provider API endpoints (OpenAI-compatible)
+        const API_ENDPOINTS: Record<string, string> = {
+          openrouter: "https://openrouter.ai/api/v1/chat/completions",
+          openai: "https://api.openai.com/v1/chat/completions",
+          groq: "https://api.groq.com/openai/v1/chat/completions",
+          together: "https://api.together.xyz/v1/chat/completions",
+          deepseek: "https://api.deepseek.com/v1/chat/completions",
+          mistral: "https://api.mistral.ai/v1/chat/completions",
+          cerebras: "https://api.cerebras.ai/v1/chat/completions",
+          perplexity: "https://api.perplexity.ai/chat/completions",
+          xai: "https://api.x.ai/v1/chat/completions",
+          ai21: "https://api.ai21.com/studio/v1/chat/completions",
+          anthropic: "https://api.anthropic.com/v1/messages",
+          cohere: "https://api.cohere.ai/v1/chat",
+          "openai-compatible": "https://openrouter.ai/api/v1/chat/completions",
+        };
+
+        const apiUrl = API_ENDPOINTS[candidateKey.provider] || "https://openrouter.ai/api/v1/chat/completions";
+
+        // Call OpenAI-compatible provider
+        if (candidateKey.provider !== "google") {
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${candidateKey.key}`,
+          };
+          if (candidateKey.provider === "openrouter") {
+            headers["HTTP-Referer"] = "https://agora-ai-hub-v2.vercel.app";
+            headers["X-Title"] = "Agora AI Hub";
           }
+
+          // For OpenRouter, try multiple free models in fallback
+          const modelsToTry = candidateKey.provider === "openrouter"
+            ? [modelUsed, "google/gemini-2.5-flash", "google/gemini-2.5-pro", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat", "mistralai/mistral-small-24b-instruct-2501"]
+            : [modelUsed];
+
+          let lastErr: any = null;
+          for (const tryModel of modelsToTry) {
+            try {
+              const response = await fetch(apiUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  model: tryModel,
+                  messages: formattedOpenRouterMessages,
+                  stream: true
+                })
+              });
+          
+              if (response.ok && response.body) {
+                actualModelUsed = tryModel;
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+            
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+              
+                  buffer += decoder.decode(value, { stream: true });
+                  const lines = buffer.split("\n");
+                  buffer = lines.pop() || "";
+              
+                  for (const line of lines) {
+                    const cleanLine = line.trim();
+                    if (!cleanLine.startsWith("data: ")) continue;
+                
+                    const jsonStr = cleanLine.substring(6);
+                    if (jsonStr === "[DONE]") break;
+                
+                    try {
+                      const parsed = JSON.parse(jsonStr);
+                      const textChunk = parsed.choices?.[0]?.delta?.content || "";
+                      if (textChunk) {
+                        finalAiResponse += textChunk;
+                        onChunk(textChunk);
+                      }
+                    } catch (e) {
+                      // Ignore malformed chunks
+                    }
+                  }
+                }
+                // Success: stop trying other keys
+                customKeyError = "";
+                break;
+              } else {
+                const bodyText = await response.text().catch(() => "");
+                const status = response.status;
+                if (status === 401 || status === 403) {
+                  candidateKey.active = false;
+                  writeDB(db);
+                  addLog("warning", `Clé API "${candidateKey.name}" désactivée (${status} - invalide).`, "Passerelle API");
+                } else {
+                  addLog("warning", `Clé API "${candidateKey.name}" a retourné ${status} sur ${tryModel}. Bascule modèle suivant.`, "Passerelle API");
+                }
+                lastErr = new Error(`API ${status}: ${bodyText}`);
+              }
+            } catch (err: any) {
+              lastErr = err;
+              console.warn(`Model ${tryModel} failed:`, err.message);
+            }
+          }
+          if (finalAiResponse) { customKeyError = ""; break; }
+          if (lastErr) throw lastErr;
         } else if (candidateKey.provider === "google") {
           const userAi = new GoogleGenAI({
             apiKey: candidateKey.key,
