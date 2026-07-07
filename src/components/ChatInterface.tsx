@@ -25,16 +25,6 @@ interface ChatInterfaceProps {
   onRetry?: () => void;
 }
 
-const AVAILABLE_MODELS = [
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Défaut)" },
-  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
-  { value: "gemini-1.5-flash-8b", label: "Gemini 1.5 Flash 8B" },
-  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Haute Qualité)" },
-  { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
-  { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-  { value: "gemini-3.1-flash-lite", label: "Gemini 3.1-lite" }
-];
-
 const welcomeGlowStyle = {
   background: "radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 70%)"
 };
@@ -582,21 +572,9 @@ export default function ChatInterface({
               {activeChat && (
                 <div className="flex items-center space-x-1.5 mt-0.5 text-[10px] text-gray-400">
                   <span>Modèle : </span>
-                  <select
-                    value={activeChat.activeModel || "gemini-2.5-flash"}
-                    onChange={(e) => {
-                      if (onUpdateChat) {
-                        onUpdateChat(activeChat.id, { activeModel: e.target.value });
-                      }
-                    }}
-                    className="bg-[#0a0a0f] border border-white/10 hover:border-white/20 text-indigo-300 font-semibold rounded px-1.5 py-0.5 outline-none focus:border-indigo-500/70 hover:text-indigo-200 transition-all cursor-pointer text-[10px]"
-                  >
-                    {AVAILABLE_MODELS.map((m) => (
-                      <option key={m.value} value={m.value} className="bg-slate-950 text-gray-300">
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="text-indigo-300 font-semibold">
+                    {activeChat.activeModel || "gemini-2.5-flash"}
+                  </span>
                 </div>
               )}
             </div>
