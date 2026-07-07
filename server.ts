@@ -229,7 +229,11 @@ const defaultDB: DB = {
   ]
 };
 
+// In-memory DB cache (persists across requests on same Vercel instance)
+let _db: DB | null = null;
+
 function readDB(): DB {
+  if (_db) return _db;
   try {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, "utf-8");
@@ -250,16 +254,19 @@ function readDB(): DB {
         fs.writeFileSync(DB_PATH, JSON.stringify(parsed, null, 2), "utf-8");
       }
       
-      return parsed;
+      _db = parsed;
+      return _db;
     }
   } catch (err) {
     console.error("Error reading database file, resetting to default", err);
   }
-  writeDB(defaultDB);
-  return defaultDB;
+  _db = JSON.parse(JSON.stringify(defaultDB));
+  writeDB(_db);
+  return _db;
 }
 
 function writeDB(data: DB) {
+  _db = data;
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch (err) {
