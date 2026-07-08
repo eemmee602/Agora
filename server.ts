@@ -904,13 +904,13 @@ app.post("/api/chats/:id/messages", async (req, res) => {
 
   // Build server-side env key list (from Vercel env vars) as fallback when DB has no keys
   const ENV_KEY_MAP: { env: string; provider: string; model: string }[] = [
-    { env: "OPENROUTER_API_KEY", provider: "openrouter", model: "google/gemini-2.5-flash" },
     { env: "GROQ_API_KEY", provider: "groq", model: "llama-3.3-70b-versatile" },
-    { env: "COHERE_API_KEY", provider: "cohere", model: "command-r-plus" },
+    { env: "OPENROUTER_API_KEY", provider: "openrouter", model: "google/gemini-2.5-flash" },
     { env: "MISTRAL_API_KEY", provider: "mistral", model: "mistral-large-latest" },
-    { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
+    { env: "COHERE_API_KEY", provider: "cohere", model: "command-r-plus" },
     { env: "GEMINI_API_KEY", provider: "google", model: "gemini-2.5-flash" },
     { env: "GOOGLE_API_KEY", provider: "google", model: "gemini-2.5-flash" },
+    { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
     { env: "TOGETHER_API_KEY", provider: "together", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
     { env: "DEEPSEEK_API_KEY", provider: "deepseek", model: "deepseek-chat" },
     { env: "PERPLEXITY_API_KEY", provider: "perplexity", model: "llama-3.1-sonar-small-128k-online" },
@@ -1026,7 +1026,12 @@ Sois concis, chaleureux, structuré et professionnel.`;
   try {
     for (const candidateKey of allKeys) {
       activeUserKey = candidateKey;
-      modelUsed = chat.activeModel || candidateKey.model || "gemini-2.5-flash";
+      // For env-based keys, always use their default model. For user keys, respect chat.activeModel.
+      if (candidateKey.id.startsWith("env-")) {
+        modelUsed = candidateKey.model;
+      } else {
+        modelUsed = chat.activeModel || candidateKey.model || "gemini-2.5-flash";
+      }
       // Normalize model id for OpenRouter/OpenAI providers
       if (candidateKey.provider === "openrouter" || candidateKey.provider === "openai") {
         const modelLower = modelUsed.toLowerCase();
@@ -1082,59 +1087,43 @@ Sois concis, chaleureux, structuré et professionnel.`;
           let lastErr: any = null;
           for (const tryModel of modelsToTry) {
             try {
+              // Use non-streaming request to the LLM provider (more reliable on Vercel serverless)
               const response = await fetch(apiUrl, {
                 method: "POST",
                 headers,
                 body: JSON.stringify({
                   model: tryModel,
                   messages: formattedOpenRouterMessages,
-                  stream: true
+                  stream: false
                 })
               });
           
-              if (response.ok && response.body) {
+              if (response.ok) {
+                const data = await response.json();
                 actualModelUsed = tryModel;
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder("utf-8");
-                let buffer = "";
-            
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-              
-                  buffer += decoder.decode(value, { stream: true });
-                  const lines = buffer.split("\n");
-                  buffer = lines.pop() || "";
-              
-                  for (const line of lines) {
-                    const cleanLine = line.trim();
-                    if (!cleanLine.startsWith("data: ")) continue;
-                
-                    const jsonStr = cleanLine.substring(6);
-                    if (jsonStr === "[DONE]") break;
-                
-                    try {
-                      const parsed = JSON.parse(jsonStr);
-                      const textChunk = parsed.choices?.[0]?.delta?.content || "";
-                      if (textChunk) {
-                        finalAiResponse += textChunk;
-                        onChunk(textChunk);
-                      }
-                    } catch (e) {
-                      // Ignore malformed chunks
-                    }
+                const text = data.choices?.[0]?.message?.content || "";
+                if (text) {
+                  // Stream the text to the client in chunks for typing effect
+                  const words = text.split(/(\s+)/);
+                  for (const word of words) {
+                    finalAiResponse += word;
+                    onChunk(word);
+                    await new Promise(r => setTimeout(r, 10));
                   }
+                  customKeyError = "";
+                  break;
                 }
-                // Success: stop trying other keys
-                customKeyError = "";
-                break;
+                throw new Error("Empty response from " + tryModel);
               } else {
                 const bodyText = await response.text().catch(() => "");
                 const status = response.status;
                 if (status === 401 || status === 403) {
-                  candidateKey.active = false;
-                  writeDB(db);
-                  addLog("warning", `Clé API "${candidateKey.name}" désactivée (${status} - invalide).`, "Passerelle API");
+                  // Only disable if it's a user key (not env-based)
+                  if (!candidateKey.id.startsWith("env-")) {
+                    candidateKey.active = false;
+                    writeDB(db);
+                  }
+                  addLog("warning", `Clé API "${candidateKey.name}" invalide (${status}).`, "Passerelle API");
                 } else {
                   addLog("warning", `Clé API "${candidateKey.name}" a retourné ${status} sur ${tryModel}. Bascule modèle suivant.`, "Passerelle API");
                 }
@@ -1167,9 +1156,10 @@ Sois concis, chaleureux, structuré et professionnel.`;
           break;
         }
       } catch (err: any) {
-        console.error("Custom user API key failed:", err);
+        console.error(`Key ${candidateKey.provider} (${candidateKey.name}) failed:`, err.message);
         customKeyError = err.message || "Erreur de connexion";
-        // Don't disable here; try next active key, fallback disables only if all fail.
+        // Continue to next key instead of breaking
+        continue;
       }
     }
     
