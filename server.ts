@@ -940,9 +940,7 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
 
   // Construct context-rich System Prompt including user memory
-  let systemPrompt = `Tu es Agora Ai, un puissant assistant IA collaboratif français sous forme d'orchestrateur d'agents hautement performant.
-Tu disposes d'un accès complet à internet, d'outils de navigation web, d'un terminal de commande Bash sandboxé, et de serveurs MCP (Model Context Protocol) configurés (notamment les intégrations GitHub, filesystem, et de recherche).
-Ne déclare JAMAIS que tu n'as pas accès à internet, au web ou à un compte GitHub comme eemmee602. Si l'utilisateur te demande d'explorer un dépôt comme vzlom-algorithmic ou d'effectuer une action système, simule l'utilisation de tes outils MCP et du protocole de gateway en ligne avec un réalisme absolu, décris l'appel aux outils MCP correspondants et produis des réponses d'une expertise technique irréprochable.`;
+  let systemPrompt = `Tu es Agora Ai, un assistant IA français utile et concis. Réponds directement à la question sans te présenter ni saluer à chaque message. Sois naturel, fluide et va droit au but.`;
   
   if (user.memory) {
     const mem = user.memory.length > MEMORY_MAX_LENGTH
@@ -951,11 +949,7 @@ Ne déclare JAMAIS que tu n'as pas accès à internet, au web ou à un compte Gi
     systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR] :\n${mem}\nAdapte-toi impérativement à ses préférences ci-dessus sans forcément les répéter ou les justifier.`;
   }
 
-  if (hasPreviousAgentMessage) {
-    systemPrompt += `\n\nATTENTION : Ce n'est pas le début de la conversation. Tu t'es déjà présenté et as déjà salué l'utilisateur par le passé dans ce chat. Ne te présente plus, ne dis pas 'Bonjour ! Je suis Agora Ai' ou d'autres formules de politesse introductives répétitives. Entre DIRECTEMENT dans le vif du sujet et réponds de façon fluide, naturelle et concise.`;
-  } else {
-    systemPrompt += `\n\nPrésente-toi brièvement et chaleureusement comme l'orchestrateur Agora Ai lors de ce premier contact.`;
-  }
+  // No greeting instructions — the AI should just answer naturally
 
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
 Si l'utilisateur te confie des détails importants sur lui (comme ses préférences de code, sa profession, ses projets, ce qu'il aime ou veut retenir), tu dois mettre à jour sa mémoire. Pour ce faire, intègre à la TOUTE FIN de ta réponse la balise XML suivante :
@@ -1210,7 +1204,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
       if (hasPreviousAgentMessage) {
         finalAiResponse = `Votre demande a été traitée avec succès par notre arbre d'agents spécialisés. L'Architecte A∀-01 a coordonné l'action de manière optimale pour répondre à votre question.\n\nN'hésitez pas à me poser d'autres questions spécifiques, ou à me demander d'effectuer des recherches sur le web.${keyInfo}`;
       } else {
-        finalAiResponse = `Bonjour ! Je suis l'orchestrateur Agora Ai. Votre demande a été reçue et analysée avec succès par notre arbre d'agents spécialisés. L'Architecte A∀-01 a coordonné l'ensemble de la tâche de manière optimale.\n\nN'hésitez pas à me poser d'autres questions spécifiques, à me demander de générer des scripts Python/Lua ou à auditer vos fichiers.${keyInfo}`;
+        finalAiResponse = `Je n'ai pas pu traiter votre demande. Vérifiez vos clés API dans les paramètres.${keyInfo}`;
       }
     }
 
