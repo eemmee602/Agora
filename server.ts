@@ -276,9 +276,9 @@ function writeDB(data: DB) {
 
 // Global server Gemini configuration
 const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) {
-    console.warn("GEMINI_API_KEY is not defined in the server environment. Fallback simulation active.");
+    console.warn("No Gemini/Google API key defined. Fallback simulation active.");
   }
   return new GoogleGenAI({
     apiKey: apiKey || "MOCK_KEY",
@@ -901,7 +901,40 @@ app.post("/api/chats/:id/messages", async (req, res) => {
 
   // Check if user has their own API keys registered and active
   const activeUserKeys = user.apiKeys.filter(k => k.active && k.key && k.key.trim().length > 0);
-  let activeUserKey: any = activeUserKeys[0] || null;
+
+  // Build server-side env key list (from Vercel env vars) as fallback when DB has no keys
+  const ENV_KEY_MAP: { env: string; provider: string; model: string }[] = [
+    { env: "OPENROUTER_API_KEY", provider: "openrouter", model: "google/gemini-2.5-flash" },
+    { env: "GROQ_API_KEY", provider: "groq", model: "llama-3.3-70b-versatile" },
+    { env: "COHERE_API_KEY", provider: "cohere", model: "command-r-plus" },
+    { env: "MISTRAL_API_KEY", provider: "mistral", model: "mistral-large-latest" },
+    { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
+    { env: "GEMINI_API_KEY", provider: "google", model: "gemini-2.5-flash" },
+    { env: "GOOGLE_API_KEY", provider: "google", model: "gemini-2.5-flash" },
+    { env: "TOGETHER_API_KEY", provider: "together", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
+    { env: "DEEPSEEK_API_KEY", provider: "deepseek", model: "deepseek-chat" },
+    { env: "PERPLEXITY_API_KEY", provider: "perplexity", model: "llama-3.1-sonar-small-128k-online" },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", model: "llama-3.3-70b" },
+    { env: "XAI_API_KEY", provider: "xai", model: "grok-beta" },
+    { env: "AI21_API_KEY", provider: "ai21", model: "jamba-1.5-large" },
+    { env: "ANTHROPIC_API_KEY", provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+  ];
+
+  // Build combined key list: user keys first, then env-based keys not already present
+  const envKeys = ENV_KEY_MAP.filter(e => {
+    const val = process.env[e.env];
+    return val && val.trim().length > 5 && !activeUserKeys.some(k => k.provider === e.provider);
+  }).map(e => ({
+    id: `env-${e.env}`,
+    name: `${e.provider} (server)`,
+    provider: e.provider,
+    key: process.env[e.env]!,
+    model: e.model,
+    active: true
+  }));
+
+  const allKeys = [...activeUserKeys, ...envKeys];
+  let activeUserKey: any = allKeys[0] || null;
 
   // Check if there are any previous agent messages to suppress repetitive greetings
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
@@ -991,7 +1024,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
   };
   
   try {
-    for (const candidateKey of activeUserKeys) {
+    for (const candidateKey of allKeys) {
       activeUserKey = candidateKey;
       modelUsed = chat.activeModel || candidateKey.model || "gemini-2.5-flash";
       // Normalize model id for OpenRouter/OpenAI providers
@@ -1024,7 +1057,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
           xai: "https://api.x.ai/v1/chat/completions",
           ai21: "https://api.ai21.com/studio/v1/chat/completions",
           anthropic: "https://api.anthropic.com/v1/messages",
-          cohere: "https://api.cohere.ai/v1/chat",
+          cohere: "https://api.cohere.com/v2/chat",
           "openai-compatible": "https://openrouter.ai/api/v1/chat/completions",
         };
 
