@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   MessageSquare, Plus, Trash2, Send, Cpu, Layers, Code, 
   ShieldCheck, Search, Copy, Check, ExternalLink, Globe, 
   Terminal, Sparkles, ChevronDown, User, Bot, AlertCircle,
   X, Menu, Paperclip, Camera, Image as ImageIcon, RefreshCw,
-  ArrowDown, Pencil, Download
+  ArrowDown, Pencil, Download, Mic, MicOff, Volume2, Square
 } from "lucide-react";
 import { Chat, Message, MessageStep, User as UserType, safeFormatTime } from "../types";
 import CodeExecutor from "./CodeExecutor";
+import { useVoiceMode } from "../hooks/useVoiceMode";
 
 interface ChatInterfaceProps {
   chats: Chat[];
@@ -61,6 +62,44 @@ export default function ChatInterface({
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [confirmDeleteActive, setConfirmDeleteActive] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+
+  // ─── Voice Mode ───
+  // Ref to track the last AI message content we've already spoken (avoid repeat)
+  const lastSpokenMsgIdRef = useRef<string | null>(null);
+  // Ref to onSendMessage so the voice hook can call it without stale closure
+  const onSendMessageRef = useRef(onSendMessage);
+  onSendMessageRef.current = onSendMessage;
+
+  const voiceMode = useVoiceMode({
+    onTranscript: (text: string) => {
+      // When user speaks in voice mode, auto-send the transcript
+      if (text.trim().length > 1) {
+        onSendMessageRef.current(text.trim());
+      }
+    },
+  });
+
+  // Auto-speak new AI messages when in voice mode
+  useEffect(() => {
+    if (!voiceMode.isActive || !activeChat || activeChat.messages.length === 0) return;
+
+    // Find the last agent message
+    const agentMessages = activeChat.messages.filter((m) => m.senderRole === "agent");
+    if (agentMessages.length === 0) return;
+
+    const lastAgentMsg = agentMessages[agentMessages.length - 1];
+
+    // Only speak if it's a new message we haven't spoken yet
+    // and the AI is not currently processing (message is complete)
+    if (
+      lastAgentMsg.id !== lastSpokenMsgIdRef.current &&
+      lastAgentMsg.content.trim().length > 0 &&
+      !isProcessing
+    ) {
+      lastSpokenMsgIdRef.current = lastAgentMsg.id;
+      voiceMode.speak(lastAgentMsg.content);
+    }
+  }, [activeChat?.messages, isProcessing, voiceMode.isActive]);
 
   const downloadCodeFile = (filename: string, code: string) => {
     const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
@@ -966,14 +1005,50 @@ export default function ChatInterface({
               <textarea
                 ref={textareaRef}
                 rows={1}
-                value={inputText}
+                value={voiceMode.isActive && voiceMode.interimText ? voiceMode.interimText : inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Discutez avec les agents Agora AI..."
+                placeholder={voiceMode.isActive ? (voiceMode.isListening ? "Parlez maintenant..." : voiceMode.isSpeaking ? "L'IA répond..." : "Mode vocal actif") : "Discutez avec les agents Agora AI..."}
                 className="w-full text-base md:text-sm px-4 py-3 bg-black/60 border-0 text-white placeholder-gray-500 focus:outline-none focus:ring-0 expanding-textarea"
                 disabled={isProcessing}
               />
             </div>
+
+            {/* Voice Mode Toggle Button */}
+            <button
+              type="button"
+              onClick={voiceMode.toggleVoiceMode}
+              className={`p-3.5 rounded-xl border transition-all flex items-center justify-center shrink-0 cursor-pointer ${
+                voiceMode.isActive
+                  ? "bg-emerald-600/30 border-emerald-500/50 text-emerald-300 shadow-lg shadow-emerald-500/10"
+                  : "bg-white/5 border-white/10 text-gray-400 hover:text-indigo-400 hover:bg-white/5"
+              }`}
+              title={voiceMode.isActive ? "Désactiver le mode vocal" : "Activer le mode vocal"}
+            >
+              {voiceMode.isActive ? (
+                voiceMode.isSpeaking ? (
+                  <Volume2 className="w-4 h-4 animate-pulse" />
+                ) : voiceMode.isListening ? (
+                  <Mic className="w-4 h-4 animate-pulse" />
+                ) : (
+                  <Mic className="w-4 h-4" />
+                )
+              ) : (
+                <MicOff className="w-4 h-4" />
+              )}
+            </button>
+
+            {/* Stop speaking button (only when AI is talking in voice mode) */}
+            {voiceMode.isActive && voiceMode.isSpeaking && (
+              <button
+                type="button"
+                onClick={voiceMode.stopSpeaking}
+                className="p-3.5 rounded-xl bg-pink-500/20 border border-pink-500/50 hover:bg-pink-500/35 text-white shadow-lg shadow-pink-500/10 transition-all flex items-center justify-center shrink-0 cursor-pointer animate-in fade-in zoom-in-95 duration-150"
+                title="Arrêter la lecture vocale"
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            )}
 
             {isProcessing ? (
               <button
@@ -1002,9 +1077,30 @@ export default function ChatInterface({
             )}
           </form>
           <div className="flex flex-col sm:flex-row sm:justify-between gap-1 text-[9px] md:text-[10px] text-gray-500 mt-2">
-            <span>Quota restant : {currentUser.quotaLimit - currentUser.quotaUsed} requêtes</span>
-            <span>Utilisez Shift + Entrée pour un saut de ligne</span>
+            <div className="flex items-center gap-3">
+              <span>Quota restant : {currentUser.quotaLimit - currentUser.quotaUsed} requêtes</span>
+              {voiceMode.isActive && (
+                <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                  <span className="relative flex h-2 w-2">
+                    {voiceMode.isListening && (
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    )}
+                    <span className={`relative inline-flex rounded-full h-2 w-2 ${voiceMode.isListening ? "bg-emerald-500" : voiceMode.isSpeaking ? "bg-indigo-500" : "bg-gray-500"}`}></span>
+                  </span>
+                  {voiceMode.isListening ? "Écoute en cours" : voiceMode.isSpeaking ? "IA parle" : "Vocal en attente"}
+                </span>
+              )}
+            </div>
+            <span>{voiceMode.isActive ? "Dites « envoyer » ou parlez naturellement" : "Utilisez Shift + Entrée pour un saut de ligne"}</span>
           </div>
+
+          {/* Voice mode error */}
+          {voiceMode.error && (
+            <div className="mt-2 px-3 py-2 rounded-lg bg-pink-950/40 border border-pink-500/20 text-pink-400 text-[10px] flex items-center gap-2 animate-in fade-in slide-in-from-bottom-1 duration-200">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{voiceMode.error}</span>
+            </div>
+          )}
         </div>
 
       </div>
