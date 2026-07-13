@@ -499,9 +499,16 @@ async function executeTool(name: string, args: any): Promise<{ success: boolean;
         const { method, url, headers, body } = args;
         if (!url || typeof url !== "string") return { success: false, result: "URL manquante" };
         if (isBlockedUrl(url)) return { success: false, result: "URL bloquée (protection SSRF)" };
+        const finalHeaders: Record<string, string> = headers || {};
+        // Auto-add Content-Type for POST/PUT/PATCH if not specified and body is present
+        const methodUpper = (method || "GET").toUpperCase();
+        if (body && !finalHeaders["Content-Type"] && !finalHeaders["content-type"] &&
+            (methodUpper === "POST" || methodUpper === "PUT" || methodUpper === "PATCH")) {
+          finalHeaders["Content-Type"] = "application/json";
+        }
         const resp = await fetch(url, {
-          method: (method || "GET").toUpperCase(),
-          headers: headers || {},
+          method: methodUpper,
+          headers: finalHeaders,
           body: body || undefined
         });
         const text = await resp.text();
@@ -1154,14 +1161,29 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   }
 
   // Update system prompt to inform the AI about available tools
-  systemPrompt += `\n\n[OUTILS DISPONIBLES] : Tu as accès à 4 outils que tu peux utiliser pour répondre aux questions de l'utilisateur :
-1. **http_request** : Effectue une requête HTTP vers une URL externe (API, site web, etc.).
-2. **github_request** : Effectue une requête vers l'API GitHub (token automatiquement inclus).
-3. **web_search** : Recherche sur le web via DuckDuckGo et retourne des résultats.
-4. **execute_code** : Exécute du code JavaScript dans un sandbox (calculs, manipulation de données).
+  systemPrompt += `\n\n[OUTILS DISPONIBLES] : Tu as accès à 4 outils que tu peux utiliser pour répondre aux questions de l'utilisateur. UTILISE-LES ACTIVEMENT quand la situation le demande :
 
-Quand tu penses qu'un outil peut t'aider à répondre, utilise-le. Tu peux appeler plusieurs outils de suite si nécessaire. Après avoir reçu le résultat d'un outil, utilise ces informations pour formuler ta réponse finale.
-Si aucun outil n'est nécessaire, réponds directement.`;
+1. **http_request** : Envoie une requête HTTP vers N'IMPORTE QUELLE URL externe.
+   - POST vers un webhook Discord/Slack : method="POST", url="https://discord.com/api/webhooks/...", body='{"content":"coucou"}'
+   - GET pour récupérer des données d'une API : method="GET", url="https://api.exemple.com/data"
+   - PUT/PATCH pour modifier des ressources distantes
+   - Tu PEUX envoyer des messages à des webhooks, interroger des APIs REST, télécharger des pages web.
+   - N'invente JAMAIS une réponse quand tu peux faire une requête réelle.
+
+2. **github_request** : Interroge l'API GitHub (token inclus automatiquement).
+   - Créer/lire/modifier des issues, PRs, repos, fichiers
+   - Ex: endpoint="/repos/owner/repo/issues", method="GET"
+   - Ex: endpoint="/repos/owner/repo/issues", method="POST", body='{"title":"Bug","body":"Description"}'
+
+3. **web_search** : Recherche sur le web via DuckDuckGo. Retourne titres + liens.
+   - Utilise-le quand tu ne connais pas la réponse et veux chercher.
+
+4. **execute_code** : Exécute du code JavaScript en sandbox (5s max, pas de réseau/fs).
+   - Calculs complexes, manipulation de données, parsing JSON, etc.
+
+RÈGLE CRITIQUE : Quand l'utilisateur te demande d'envoyer quelque chose quelque part (webhook, API, serveur), UTILISE http_request. Ne dis JAMAIS "je ne peux pas" si tu as l'outil http_request disponible. Dis "je ne peux pas" UNIQUEMENT si c'est techniquement impossible (URL interne/bloquée).
+
+Après avoir reçu le résultat d'un outil, utilise ces informations pour formuler ta réponse finale à l'utilisateur. Tu peux appeler plusieurs outils de suite.`;
 
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
 Si l'utilisateur te confie des détails importants sur lui (comme ses préférences de code, sa profession, ses projets, ce qu'il aime ou veut retenir), tu dois mettre à jour sa mémoire. Pour ce faire, intègre à la TOUTE FIN de ta réponse la balise XML suivante :
@@ -1170,8 +1192,15 @@ Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'ap
 <update_title>Le Nouveau Titre</update_title>.
 Sois concis, chaleureux, structuré et professionnel.`;
 
+  // Limit conversation history to last N messages to fit within context window
+  // (especially important for free-tier models with small context windows like Groq llama-70b: 4096 tokens)
+  const MAX_HISTORY_MESSAGES = 20;
+  const recentMessages = chat.messages.length > MAX_HISTORY_MESSAGES
+    ? chat.messages.slice(-MAX_HISTORY_MESSAGES)
+    : chat.messages;
+
   // Format history for models, including image attachments for multi-modal processing
-  const formattedGoogleContents = chat.messages.filter(m => m.senderRole !== "system").map(msg => {
+  const formattedGoogleContents = recentMessages.filter(m => m.senderRole !== "system").map(msg => {
     const parts: any[] = [{ text: msg.content }];
     
     if (msg.attachments && Array.isArray(msg.attachments)) {
@@ -1200,7 +1229,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
 
   const formattedOpenRouterMessages = [
     { role: "system", content: systemPrompt },
-    ...chat.messages.filter(m => m.senderRole !== "system").map(msg => {
+    ...recentMessages.filter(m => m.senderRole !== "system").map(msg => {
       if (msg.attachments && msg.attachments.some(a => a.type === "image" && a.base64)) {
         const contentArray: any[] = [{ type: "text", text: msg.content }];
         msg.attachments.forEach(attachment => {
