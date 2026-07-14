@@ -977,6 +977,9 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const codeFiles: { fileName: string; language: string; content: string }[] = [];
   const sources: { title: string; url: string }[] = [];
 
+  // Track tool calls for context persistence across messages
+  const toolCallLog: { tool: string; args: any; result: string; success: boolean }[] = [];
+
   const lowerContent = content.toLowerCase();
   // Exclude question prefixes to prevent generating empty files for general chitchat/questions
   const hasCodeQuestionPrefix = /(sais-tu|peux-tu|tu peux|est-ce que tu|comment tu|que sais|qu'est-ce que tu|qu'est ce que tu|pourquoi|tu sais)/gi.test(content);
@@ -1193,8 +1196,8 @@ Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'ap
 Sois concis, chaleureux, structuré et professionnel.`;
 
   // Limit conversation history to last N messages to fit within context window
-  // (especially important for free-tier models with small context windows like Groq llama-70b: 4096 tokens)
-  const MAX_HISTORY_MESSAGES = 20;
+  // 50 messages = good balance between context retention and token limits
+  const MAX_HISTORY_MESSAGES = 50;
   const recentMessages = chat.messages.length > MAX_HISTORY_MESSAGES
     ? chat.messages.slice(-MAX_HISTORY_MESSAGES)
     : chat.messages;
@@ -1386,6 +1389,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
                       // Execute the tool
                       const toolResult = await executeTool(toolName, toolArgs);
 
+                      // Log for context persistence
+                      toolCallLog.push({ tool: toolName, args: toolArgs, result: toolResult.result.substring(0, 500), success: toolResult.success });
+
                       // Stream tool_result event to frontend
                       sendEvent({
                         type: "tool_result",
@@ -1519,6 +1525,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
                   addLog("info", `Outil appelé: ${fnName}`, "Tool Calling");
 
                   const toolResult = await executeTool(fnName, fnArgs);
+
+                  // Log for context persistence
+                  toolCallLog.push({ tool: fnName, args: fnArgs, result: toolResult.result.substring(0, 500), success: toolResult.success });
 
                   sendEvent({
                     type: "tool_result",
@@ -1670,12 +1679,22 @@ Sois concis, chaleureux, structuré et professionnel.`;
 
   const elapsedMs = Date.now() - startTime;
 
+  // Build persisted content: AI response + tool call context for future messages
+  let persistedContent = finalAiResponse;
+  if (toolCallLog.length > 0) {
+    const toolSummary = toolCallLog.map(tc => {
+      const argsStr = JSON.stringify(tc.args).substring(0, 200);
+      return `[OUTIL: ${tc.tool}(${argsStr}) → ${tc.success ? "OK" : "ÉCHEC"}: ${tc.result.substring(0, 200)}]`;
+    }).join("\n");
+    persistedContent = `${finalAiResponse}\n\n[CONTEXTE OUTILS PRÉCÉDENTS]\n${toolSummary}`;
+  }
+
   const responseMessage: Message = {
     id: `msg-${Date.now()}-ai`,
     senderId: "agent-architect",
     senderName: "Agora Agents A∀",
     senderRole: "agent",
-    content: finalAiResponse,
+    content: persistedContent,
     timestamp: new Date().toISOString(),
     steps,
     codeFiles: codeFiles.length > 0 ? codeFiles : undefined,
