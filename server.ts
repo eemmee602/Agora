@@ -38,6 +38,7 @@ async function loadUserMemories(userId: string): Promise<MemoryEntry[]> {
           Authorization: `Bearer ${SUPABASE_KEY}`,
           "Content-Type": "application/json",
         },
+        signal: AbortSignal.timeout(3000),
       }
     );
     if (!resp.ok) {
@@ -89,7 +90,7 @@ async function getModelCache(userId: string): Promise<Record<string, { last_succ
   try {
     const resp = await fetch(
       `${SUPABASE_URL}/rest/v1/agora_model_cache?user_id=eq.${encodeURIComponent(userId)}`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, signal: AbortSignal.timeout(3000) }
     );
     if (!resp.ok) return {};
     const rows = await resp.json() as any[];
@@ -1567,28 +1568,32 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   _globalSendEvent = sendEvent;
 
   // If this is the very first user message of the chat, automatically generate a title based on context
+  // SKIP auto-title if no valid Gemini key (avoids timeout)
   const userMessages = chat.messages.filter(m => m.senderRole === "user");
   if (userMessages.length === 1 && chat.title.startsWith("Chat ")) {
-    try {
-      const aiClient = getGeminiClient();
-      console.log("[Auto-Title] Generating appropriate chat title for first message...");
-      const titlePrompt = `Génère un titre très court (maximum 4 mots), élégant et thématique en français pour une conversation qui commence par ce message utilisateur: "${content}". Réponds uniquement avec le titre brut, sans guillemets, sans point final, sans mise en forme Markdown, et sans blabla explicatif. Exemples : "Calcul d'Intégrales Python", "Analyse Sécurité Docker", "Correction Script Lua", "Idées Recettes".`;
-      
-      const generatedTitle = await callGeminiWithRetry(
-        aiClient,
-        [{ text: titlePrompt }],
-        { temperature: 0.5 },
-        "gemini-2.5-flash"
-      );
-      
-      const cleanTitle = generatedTitle.trim().replace(/^["'«»“‘\(]|["'«»”’\)]$/g, "").replace(/\.$/, "").trim();
-      if (cleanTitle && cleanTitle.length > 2 && cleanTitle.length < 50) {
-        chat.title = cleanTitle;
-        console.log(`[Auto-Title] Chat updated to: "${cleanTitle}"`);
-        addLog("success", `Titre de chat généré automatiquement : "${cleanTitle}".`, "Agora Core");
+    const googleKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (googleKey && googleKey.trim().length >= 30) {
+      try {
+        const aiClient = getGeminiClient();
+        console.log("[Auto-Title] Generating appropriate chat title for first message...");
+        const titlePrompt = `Génère un titre très court (maximum 4 mots), élégant et thématique en français pour une conversation qui commence par ce message utilisateur: "${content}". Réponds uniquement avec le titre brut, sans guillemets, sans point final, sans mise en forme Markdown, et sans blabla explicatif. Exemples : "Calcul d'Intégrales Python", "Analyse Sécurité Docker", "Correction Script Lua", "Idées Recettes".`;
+        
+        const generatedTitle = await callGeminiWithRetry(
+          aiClient,
+          [{ text: titlePrompt }],
+          { temperature: 0.5 },
+          "gemini-2.5-flash"
+        );
+        
+        const cleanTitle = generatedTitle.trim().replace(/^["'«""'\(]|["'«»"'\)]$/g, "").replace(/\.$/, "").trim();
+        if (cleanTitle && cleanTitle.length > 2 && cleanTitle.length < 50) {
+          chat.title = cleanTitle;
+          console.log(`[Auto-Title] Chat updated to: "${cleanTitle}"`);
+          addLog("success", `Titre de chat généré automatiquement : "${cleanTitle}".`, "Agora Core");
+        }
+      } catch (e) {
+        console.error("[Auto-Title] Failed to generate chat title:", e);
       }
-    } catch (e) {
-      console.error("[Auto-Title] Failed to generate chat title:", e);
     }
   }
 
