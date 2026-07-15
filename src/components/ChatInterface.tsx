@@ -80,24 +80,39 @@ export default function ChatInterface({
   });
 
   // Auto-speak new AI messages when in voice mode
+  // Use a debounce to detect when the AI message content has stopped growing (streaming done)
+  const lastContentRef = useRef<string>("");
+  const speakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (!voiceMode.isActive || !activeChat || activeChat.messages.length === 0) return;
 
-    // Find the last agent message
     const agentMessages = activeChat.messages.filter((m) => m.senderRole === "agent");
     if (agentMessages.length === 0) return;
 
     const lastAgentMsg = agentMessages[agentMessages.length - 1];
 
-    // Only speak if it's a new message we haven't spoken yet
-    // and the AI is not currently processing (message is complete)
-    if (
-      lastAgentMsg.id !== lastSpokenMsgIdRef.current &&
-      lastAgentMsg.content.trim().length > 0 &&
-      !isProcessing
-    ) {
-      lastSpokenMsgIdRef.current = lastAgentMsg.id;
-      voiceMode.speak(lastAgentMsg.content);
+    // Skip if already spoken
+    if (lastAgentMsg.id === lastSpokenMsgIdRef.current) return;
+    if (lastAgentMsg.content.trim().length === 0) return;
+
+    // Track content growth — if content keeps changing (streaming), wait for it to settle
+    if (lastContentRef.current !== lastAgentMsg.content) {
+      lastContentRef.current = lastAgentMsg.content;
+
+      // Clear any pending speak timer
+      if (speakTimerRef.current) clearTimeout(speakTimerRef.current);
+
+      // If not processing, speak quickly (100ms). If processing (streaming), wait 600ms for content to settle.
+      const delay = isProcessing ? 600 : 100;
+      speakTimerRef.current = setTimeout(() => {
+        // Double-check content hasn't changed since we set the timer
+        const currentLast = activeChat.messages.filter(m => m.senderRole === "agent").pop();
+        if (currentLast && currentLast.id === lastAgentMsg.id && currentLast.content === lastAgentMsg.content) {
+          lastSpokenMsgIdRef.current = lastAgentMsg.id;
+          voiceMode.speak(lastAgentMsg.content);
+        }
+      }, delay);
     }
   }, [activeChat?.messages, isProcessing, voiceMode.isActive]);
 
@@ -822,6 +837,30 @@ export default function ChatInterface({
                 );
               })}
 
+              {/* Typing indicator bubble — "IA écrit…" */}
+              {isProcessing && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex space-x-2.5 sm:space-x-4 w-full mr-auto"
+                >
+                  <div className="hidden sm:flex w-8 h-8 rounded-lg items-center justify-center border shrink-0 bg-indigo-600/10 border-indigo-500/20 text-indigo-400">
+                    <Bot className="w-4 h-4" />
+                  </div>
+                  <div className="flex flex-col space-y-1 min-w-0">
+                    <div className="flex items-center space-x-2 text-[10px] select-none pb-0.5 px-1">
+                      <span className="font-bold tracking-wide uppercase text-indigo-300">Agora AI</span>
+                      <span className="text-[9px] text-indigo-400/80 font-mono">écrit...</span>
+                    </div>
+                    <div className="px-4 py-3.5 rounded-2xl border bg-black/30 border-white/5 text-gray-200 rounded-tl-none inline-flex items-center space-x-1.5">
+                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
               {/* Active Orchestration Live Log Console Terminal */}
               {isProcessing && liveOrchestrationLogs.length > 0 && (
                 <motion.div
@@ -1132,7 +1171,7 @@ export default function ChatInterface({
           });
         }
         setVisibleCount(index);
-      }, 220); // Revealing each paragraph/line fluidly every 220ms
+      }, 12); // Fast reveal — near-instant but still has a subtle animation
 
       return () => clearInterval(interval);
     }, [text, msgId, isAlreadyAnimated, parsedBlocks.length]);

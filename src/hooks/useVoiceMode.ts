@@ -50,14 +50,31 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
     (("webkitSpeechRecognition" in window) || ("SpeechRecognition" in window)) &&
     "speechSynthesis" in window;
 
-  // Preload voices (Chrome loads them async)
+  // Preload voices (Chrome loads them async — retry until loaded)
+  const voicesReadyRef = useRef(false);
   useEffect(() => {
     if (!isSupported) return;
-    const loadVoices = () => { window.speechSynthesis.getVoices(); };
+    const loadVoices = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v.length > 0) {
+        voicesReadyRef.current = true;
+      }
+    };
     loadVoices();
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
+    // Retry every 250ms for up to 3s (Chrome sometimes loads very late)
+    let retries = 0;
+    const retryInt = setInterval(() => {
+      if (voicesReadyRef.current || retries >= 12) {
+        clearInterval(retryInt);
+        return;
+      }
+      loadVoices();
+      retries++;
+    }, 250);
+    return () => clearInterval(retryInt);
   }, [isSupported]);
 
   // Build recognition instance
@@ -262,15 +279,27 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       utterance.pitch = 1;
 
       // Try to pick the best available French voice
-      const voices = window.speechSynthesis.getVoices();
-      // Prefer native fr-FR voices, then any fr-* voice, then Google voice
+      let voices = window.speechSynthesis.getVoices();
+      // Force reload if empty (Chrome quirk)
+      if (voices.length === 0) {
+        window.speechSynthesis.getVoices();
+        voices = window.speechSynthesis.getVoices();
+      }
+      // Prefer native fr-FR voices, then any fr-* voice, then Google voice, then any voice
       const frVoice = voices.find((v) => v.lang === "fr-FR" && v.localService)
         || voices.find((v) => v.lang === "fr-FR")
         || voices.find((v) => v.lang.startsWith("fr"))
-        || voices.find((v) => v.name.toLowerCase().includes("google") && v.lang.startsWith("fr"));
+        || voices.find((v) => v.name.toLowerCase().includes("google") && v.lang.startsWith("fr"))
+        || voices.find((v) => v.lang === "fr" || v.lang === "fr_CA" || v.lang === "fr-BE");
       if (frVoice) {
         utterance.voice = frVoice;
       }
+      // If no voice at all, set lang and let browser pick default
+      if (!frVoice) {
+        utterance.lang = "fr-FR";
+      }
+      // Ensure volume is at max
+      utterance.volume = 1;
 
       utterance.onend = () => {
         chunkIndex++;
@@ -315,13 +344,6 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
         window.speechSynthesis.cancel();
       }
     };
-  }, []);
-
-  // Preload voices (Chrome quirk)
-  useEffect(() => {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.getVoices();
-    }
   }, []);
 
   return {
