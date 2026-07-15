@@ -302,6 +302,211 @@ const GEMINI_MODELS = [
 
 const MEMORY_MAX_LENGTH = 2000;
 
+// -----------------------------------------------------------------
+// SUPABASE MEMORY BACKEND — persistent across devices & sessions
+// -----------------------------------------------------------------
+const SUPABASE_URL = process.env.AGORA_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.AGORA_SUPABASE_KEY || "";
+
+interface MemoryEntry {
+  id?: string;
+  user_id: string;
+  category: string;      // "preferences" | "context" | "facts" | "habits" | "personality"
+  source: string;        // "user_stated" | "ai_observed" | "ai_inferred"
+  content: string;
+  confidence?: number;
+  times_referenced?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// In-memory cache for memory entries (per Vercel instance)
+const _memoryCache: Map<string, { entries: MemoryEntry[]; ts: number }> = new Map();
+const MEMORY_CACHE_TTL = 30_000; // 30s cache
+
+/** Fetch all memory entries for a user from Supabase. */
+async function fetchUserMemory(userId: string): Promise<MemoryEntry[]> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return [];
+
+  // Check cache
+  const cached = _memoryCache.get(userId);
+  if (cached && Date.now() - cached.ts < MEMORY_CACHE_TTL) {
+    return cached.entries;
+  }
+
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc&limit=100`,
+      {
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+    if (res.ok) {
+      const rows = await res.json() as MemoryEntry[];
+      _memoryCache.set(userId, { entries: rows, ts: Date.now() });
+      return rows;
+    }
+    console.warn(`[memory] fetchUserMemory ${res.status}: ${await res.text().catch(() => "")}`);
+  } catch (err) {
+    console.warn("[memory] fetchUserMemory error:", err);
+  }
+  return [];
+}
+
+/** Build a concise memory summary string for the system prompt. */
+function formatMemoryForPrompt(entries: MemoryEntry[]): string {
+  if (entries.length === 0) return "";
+  // Group by category
+  const byCat: Record<string, string[]> = {};
+  for (const e of entries) {
+    const cat = e.category || "facts";
+    if (!byCat[cat]) byCat[cat] = [];
+    byCat[cat].push(e.content);
+  }
+  const labels: Record<string, string> = {
+    preferences: "PRÉFÉRENCES",
+    context: "CONTEXTE",
+    facts: "FAITS",
+    habits: "HABITUDES",
+    personality: "PERSONNALITÉ",
+  };
+  const parts: string[] = [];
+  for (const [cat, items] of Object.entries(byCat)) {
+    const label = labels[cat] || cat.toUpperCase();
+    parts.push(`- ${label}: ${items.join("; ")}`);
+  }
+  return parts.join("\n");
+}
+
+/** Add a new memory entry to Supabase (or update if similar content exists). */
+async function addUserMemory(
+  userId: string,
+  username: string,
+  category: string,
+  source: string,
+  content: string,
+  confidence: number = 1.0
+): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY || !content.trim()) return;
+
+  try {
+    // Check if a similar entry exists (same user + category + content prefix)
+    const prefix = content.substring(0, 80).replace(/'/g, "''");
+    const checkRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?user_id=eq.${encodeURIComponent(userId)}&category=eq.${encodeURIComponent(category)}&content=ilike.${encodeURIComponent(prefix + "%")}&limit=1`,
+      {
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+    if (checkRes.ok) {
+      const existing = await checkRes.json() as MemoryEntry[];
+      if (existing.length > 0) {
+        // Update existing entry
+        await fetch(`${SUPABASE_URL}/rest/v1/agora_user_memories?id=eq.${existing[0].id}`, {
+          method: "PATCH",
+          headers: {
+            "apikey": SUPABASE_KEY,
+            "Authorization": `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+          },
+          body: JSON.stringify({
+            content,
+            source,
+            confidence,
+            updated_at: new Date().toISOString(),
+            times_referenced: (existing[0].times_referenced || 0) + 1,
+          }),
+        });
+        // Invalidate cache
+        _memoryCache.delete(userId);
+        return;
+      }
+    }
+
+    // Insert new entry
+    await fetch(`${SUPABASE_URL}/rest/v1/agora_user_memories`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        username,
+        category,
+        source,
+        content,
+        confidence,
+      }),
+    });
+    // Invalidate cache
+    _memoryCache.delete(userId);
+  } catch (err) {
+    console.warn("[memory] addUserMemory error:", err);
+  }
+}
+
+/** Parse structured memory updates from AI response.
+ * Supports both <update_memory>flat text</update_memory> (legacy)
+ * and <memory_entry category="..." source="...">content</memory_entry> (structured).
+ */
+async function processMemoryUpdates(
+  aiResponse: string,
+  userId: string,
+  username: string
+): Promise<string> {
+  // Process structured entries: <memory_entry category="preferences" source="user_stated">content</memory_entry>
+  const structuredRegex = /<memory_entry\s+category="([^"]+)"\s+source="([^"]+)">([\s\S]*?)<\/memory_entry>/gi;
+  let match;
+  let cleaned = aiResponse;
+  while ((match = structuredRegex.exec(aiResponse)) !== null) {
+    const category = match[1].trim();
+    const source = match[2].trim();
+    const content = match[3].trim();
+    if (content) {
+      await addUserMemory(userId, username, category, source, content);
+    }
+    cleaned = cleaned.replace(match[0], "");
+  }
+
+  // Process legacy flat: <update_memory>text</update_memory>
+  const legacyRegex = /<update_memory>([\s\S]*?)<\/update_memory>/i;
+  const legacyMatch = cleaned.match(legacyRegex);
+  if (legacyMatch) {
+    const text = legacyMatch[1].trim();
+    if (text) {
+      // Try to parse as structured (PRÉFÉRENCES: ..., CONTEXTE: ..., etc.)
+      const sections = text.split(/\n/).filter((l: string) => l.trim());
+      for (const line of sections) {
+        const m = line.match(/^[-•]?\s*(PR[ÉE]F[ÉE]RENCES|CONTEXTE|FAITS|HABITUDES|PERSONNALIT[ÉE]|PREFERENCES)\s*:\s*(.+)/i);
+        if (m) {
+          const cat = m[1].toLowerCase().includes("préf") || m[1].toLowerCase().includes("pref") ? "preferences"
+            : m[1].toLowerCase().includes("contexte") ? "context"
+            : m[1].toLowerCase().includes("habitud") ? "habits"
+            : m[1].toLowerCase().includes("personnal") ? "personality"
+            : "facts";
+          await addUserMemory(userId, username, cat, "user_stated", m[2].trim());
+        } else if (line.trim().length > 5) {
+          // Unstructured line → store as facts
+          await addUserMemory(userId, username, "facts", "user_stated", line.trim());
+        }
+      }
+    }
+    cleaned = cleaned.replace(legacyRegex, "").trim();
+  }
+
+  return cleaned;
+}
+
 async function callGeminiWithRetry(
   client: GoogleGenAI,
   contents: any,
@@ -1163,11 +1368,12 @@ PRINCIPES DE COMMUNICATION :
 - Adapte ton niveau de détail à la demande : question simple = réponse simple, question complexe = réponse structurée.
 - Si tu as fait une action (outil, requête, code), rappelle-le brièvement dans ta réponse pour que l'utilisateur sache ce qui a été fait.`;
 
-  if (user.memory) {
-    const mem = user.memory.length > MEMORY_MAX_LENGTH
-      ? user.memory.substring(0, MEMORY_MAX_LENGTH)
-      : user.memory;
-    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR] :\n${mem}\nAdapte-toi impérativement à ses préférences et son contexte ci-dessus. Utilise ces informations pour personnaliser tes réponses sans forcément les répéter ou les justifier. Si tu apprends de nouvelles informations sur l'utilisateur, mets à jour sa mémoire.`;
+  // Fetch persistent memory from Supabase (works across devices & sessions)
+  const memoryEntries = await fetchUserMemory(user.id);
+  const memoryText = formatMemoryForPrompt(memoryEntries);
+
+  if (memoryText) {
+    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR — persistante] :\n${memoryText}\nAdapte-toi impérativement à ses préférences et son contexte ci-dessus. Utilise ces informations pour personnaliser tes réponses sans forcément les répéter ou les justifier.`;
   }
 
   // Update system prompt to inform the AI about available tools
@@ -1196,13 +1402,28 @@ RÈGLE CRITIQUE : Quand l'utilisateur te demande d'envoyer quelque chose quelque
 Après avoir reçu le résultat d'un outil, utilise ces informations pour formuler ta réponse finale à l'utilisateur. Tu peux appeler plusieurs outils de suite.`;
 
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
-Si l'utilisateur te confie des détails importants sur lui (comme ses préférences de code, sa profession, ses projets, ce qu'il aime ou veut retenir), tu dois mettre à jour sa mémoire. Pour ce faire, intègre à la TOUTE FIN de ta réponse la balise XML suivante :
-<update_memory>Texte de la mémoire mise à jour consolidant toutes les informations actuelles et nouvelles apprises sur l'utilisateur de manière concise et claire.</update_memory>.
-La mémoire doit être structurée en sections courtes :
-- PRÉFÉRENCES : ce qu'il aime/n'aime pas en matière de style de réponse, langage, etc.
-- CONTEXTE : ses projets, son travail, ses outils habituels
-- FAITS : informations factuelles retenues (nom, rôle, environnement technique)
-Garde la mémoire sous 2000 caractères. Sois concis mais complet.
+
+[SYSTÈME DE MÉMOIRE PERSISTANTE] :
+Tu as une mémoire persistante stockée côté serveur. Elle survit aux changements d'appareil et de chat. Tu DOIS l'enrichir proactivement.
+
+QUAND enregistrer (OBLIGATOIRE) :
+- L'utilisateur te dit quelque chose sur lui (préférences, projet, travail, outils, style)
+- Tu observes une pattern récurrent (il pose toujours des questions sur X, il préfère Y)
+- Tu infères quelque chose d'utile (son niveau technique, son domaine, sa langue préférée)
+- L'utilisateur te demande explicitement de retenir quelque chose
+
+COMMENT enregistrer — utilise la balise structurée à la FIN de ta réponse :
+<memory_entry category="preferences" source="user_stated">préfère les réponses courtes et directes</memory_entry>
+<memory_entry category="context" source="ai_observed">travaille sur un projet Roblox appelé Agora Admin</memory_entry>
+<memory_entry category="facts" source="user_stated">s'appelle Emerick, est développeur</memory_entry>
+
+Catégories disponibles : preferences, context, facts, habits, personality
+Sources : user_stated (l'utilisateur l'a dit), ai_observed (tu l'as remarqué), ai_inferred (tu l'as déduit)
+
+SOIS PROACTIF : même si l'utilisateur ne te dit pas explicitement "retiens ça", si tu observes quelque chose d'utile pour personnaliser tes futures réponses, ENREGISTRE-LE. Tu peux aussi proposer des entrées de mémoire basées sur ton analyse de la conversation. N'attends pas qu'on te le demande.
+
+Ne fais PAS de mémoire sur : les questions ponctuelles, le contenu d'une seule conversation, les informations triviales. Concentre-toi sur ce qui sera utile DANS LES FUTURES conversations.
+
 Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'appeler autrement, tu dois impérativement inclure à la TOUTE FIN de ta réponse la balise XML suivante avec le nouveau titre court et descriptif :
 <update_title>Le Nouveau Titre</update_title>.
 Sois concis, chaleureux, structuré et professionnel.`;
@@ -1661,21 +1882,8 @@ Sois concis, chaleureux, structuré et professionnel.`;
     }
   }
 
-  // Parse and update user memory if present in the AI response
-  const memoryRegex = /<update_memory>([\s\S]*?)<\/update_memory>/i;
-  const match = finalAiResponse.match(memoryRegex);
-  if (match) {
-    const newMemory = match[1].trim();
-    const freshDb = readDB();
-    const dbUser = freshDb.users.find(u => u.id === user.id);
-    if (dbUser) {
-      dbUser.memory = newMemory;
-      writeDB(freshDb);
-      user.memory = newMemory;
-      addLog("success", `Mémoire de l'IA mise à jour pour ${user.username}.`, "Mémoire de l'IA");
-    }
-    finalAiResponse = finalAiResponse.replace(memoryRegex, "").trim();
-  }
+  // Process memory updates and save to Supabase (persistent)
+  finalAiResponse = await processMemoryUpdates(finalAiResponse, user.id, user.username);
 
   // Parse and update chat title if present in the AI response
   const titleRegex = /<update_title>([\s\S]*?)<\/update_title>/i;
