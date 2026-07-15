@@ -65,6 +65,79 @@ export default function ChatInterface({
   const [confirmDeleteActive, setConfirmDeleteActive] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Long-press / right-click context menu for messages
+  const [contextMenu, setContextMenu] = useState<{
+    messageId: string;
+    content: string;
+    isUser: boolean;
+    x: number;
+    y: number;
+  } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+
+  // Close context menu on any click/scroll
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
+
+  const handleLongPressStart = (e: React.TouchEvent, msg: any, isUser: boolean) => {
+    const touch = e.touches[0];
+    longPressTimer.current = setTimeout(() => {
+      setContextMenu({
+        messageId: msg.id,
+        content: msg.content,
+        isUser,
+        x: touch.clientX,
+        y: touch.clientY,
+      });
+    }, 500);
+  };
+
+  const handleLongPressEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, msg: any, isUser: boolean) => {
+    e.preventDefault();
+    setContextMenu({
+      messageId: msg.id,
+      content: msg.content,
+      isUser,
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
+  const handleCopyMessage = (content: string, messageId: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedMsgId(messageId);
+    setTimeout(() => setCopiedMsgId(null), 2000);
+    setContextMenu(null);
+  };
+
+  const handleRetryMessage = (content: string, isUser: boolean) => {
+    setContextMenu(null);
+    // Find the user message that preceded this agent message, or use this message if it's from user
+    const retryContent = isUser ? content : content;
+    // Call onSendMessage to resend — the parent handles finding the right message to retry
+    if (onRetry) {
+      onRetry();
+    } else if (onSendMessage) {
+      onSendMessage(retryContent);
+    }
+  };
+
   // ─── Voice Mode ───
   // Ref to track the last AI message content we've already spoken (avoid repeat)
   const lastSpokenMsgIdRef = useRef<string | null>(null);
@@ -646,6 +719,11 @@ export default function ChatInterface({
                     id={`msg-container-${msg.id}`}
                     initial={{ opacity: 0, y: 15 }}
                     animate={{ opacity: 1, y: 0 }}
+                    onContextMenu={(e) => handleContextMenu(e, msg, isUser)}
+                    onTouchStart={(e) => handleLongPressStart(e, msg, isUser)}
+                    onTouchEnd={handleLongPressEnd}
+                    onTouchMove={handleLongPressEnd}
+                    style={{ WebkitUserSelect: "none", userSelect: "none" }}
                     className={`flex space-x-2.5 sm:space-x-4 w-full ${
                       isUser 
                         ? "ml-auto flex-row-reverse space-x-reverse max-w-[92%] sm:max-w-[80%]" 
@@ -1090,6 +1168,49 @@ export default function ChatInterface({
         </div>
 
       </div>
+
+      {/* Long-press / right-click context menu for messages */}
+      <AnimatePresence>
+        {contextMenu && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            transition={{ duration: 0.15 }}
+            className="fixed z-[10000] bg-zinc-900/95 backdrop-blur-md border border-white/15 rounded-xl shadow-2xl shadow-black/50 p-1.5 min-w-[160px]"
+            style={{
+              left: Math.min(contextMenu.x, window.innerWidth - 180),
+              top: Math.min(contextMenu.y, window.innerHeight - 100),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => handleCopyMessage(contextMenu.content, contextMenu.messageId)}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/10 transition-colors text-sm text-gray-200"
+            >
+              {copiedMsgId === contextMenu.messageId ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span className="text-emerald-400 font-medium">Copié !</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 text-gray-400" />
+                  <span>Copier</span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => handleRetryMessage(contextMenu.content, contextMenu.isUser)}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/10 transition-colors text-sm text-gray-200"
+            >
+              <RefreshCw className="w-4 h-4 text-gray-400" />
+              <span>Réessayer</span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 

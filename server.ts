@@ -1327,36 +1327,51 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const activeUserKeys = user.apiKeys.filter(k => k.active && k.key && k.key.trim().length > 0);
 
   // Build server-side env key list (from Vercel env vars) as fallback when DB has no keys
-  const ENV_KEY_MAP: { env: string; provider: string; model: string }[] = [
-    { env: "GROQ_API_KEY", provider: "groq", model: "llama-3.3-70b-versatile" },
-    { env: "OPENROUTER_API_KEY", provider: "openrouter", model: "google/gemini-2.5-flash" },
-    { env: "MISTRAL_API_KEY", provider: "mistral", model: "mistral-large-latest" },
-    { env: "COHERE_API_KEY", provider: "cohere", model: "command-r-plus" },
-    { env: "GEMINI_API_KEY", provider: "google", model: "gemini-2.5-flash" },
-    { env: "GOOGLE_API_KEY", provider: "google", model: "gemini-2.5-flash" },
+  // Multi-model providers: each key can try multiple models before moving to next provider
+  const ENV_KEY_MAP: { env: string; provider: string; models: string[] }[] = [
+    { env: "GROQ_API_KEY", provider: "groq", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
+    { env: "OPENROUTER_API_KEY", provider: "openrouter", models: [
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct",
+      "qwen/qwen-2.5-72b-instruct",
+      "mistralai/mistral-7b-instruct",
+      "deepseek/deepseek-chat",
+      "anthropic/claude-3.5-haiku",
+    ] },
+    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
+    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
+    { env: "GEMINI_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
+    { env: "GOOGLE_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
     // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
-    // { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
-    { env: "TOGETHER_API_KEY", provider: "together", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
-    { env: "DEEPSEEK_API_KEY", provider: "deepseek", model: "deepseek-chat" },
-    { env: "PERPLEXITY_API_KEY", provider: "perplexity", model: "llama-3.1-sonar-small-128k-online" },
-    { env: "CEREBRAS_API_KEY", provider: "cerebras", model: "llama-3.3-70b" },
-    { env: "XAI_API_KEY", provider: "xai", model: "grok-beta" },
-    { env: "AI21_API_KEY", provider: "ai21", model: "jamba-1.5-large" },
-    { env: "ANTHROPIC_API_KEY", provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+    // { env: "OPENAI_API_KEY", provider: "openai", models: ["gpt-4o-mini"] },
+    { env: "TOGETHER_API_KEY", provider: "together", models: ["meta-llama/Llama-3.3-70B-Instruct-Turbo"] },
+    { env: "DEEPSEEK_API_KEY", provider: "deepseek", models: ["deepseek-chat"] },
+    { env: "PERPLEXITY_API_KEY", provider: "perplexity", models: ["llama-3.1-sonar-small-128k-online"] },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
+    { env: "XAI_API_KEY", provider: "xai", models: ["grok-beta"] },
+    { env: "AI21_API_KEY", provider: "ai21", models: ["jamba-1.5-large"] },
+    { env: "ANTHROPIC_API_KEY", provider: "anthropic", models: ["claude-3-5-sonnet-20241022"] },
+    { env: "HUGGINGFACE_API_KEY", provider: "huggingface", models: ["meta-llama/Llama-3.3-70B-Instruct"] },
+    { env: "FIREWORKS_API_KEY", provider: "fireworks", models: ["accounts/fireworks/models/llama-v3p3-70b-instruct"] },
+    { env: "NOVITA_API_KEY", provider: "novita", models: ["meta-llama/llama-3.3-70b-instruct"] },
+    { env: "CHUTES_API_KEY", provider: "chutes", models: ["chutes/llama-3.3-70b"] },
   ];
 
   // Build combined key list: user keys first, then env-based keys not already present
+  // Each env key expands into multiple candidate keys (one per model)
   const envKeys = ENV_KEY_MAP.filter(e => {
     const val = process.env[e.env];
     return val && val.trim().length > 5 && !activeUserKeys.some(k => k.provider === e.provider);
-  }).map(e => ({
-    id: `env-${e.env}`,
-    name: `${e.provider} (server)`,
-    provider: e.provider,
-    key: process.env[e.env]!,
-    model: e.model,
-    active: true
-  }));
+  }).flatMap(e => 
+    e.models.map(model => ({
+      id: `env-${e.env}-${model}`,
+      name: `${e.provider} (server)`,
+      provider: e.provider,
+      key: process.env[e.env]!,
+      model,
+      active: true
+    }))
+  );
 
   const allKeys = [...activeUserKeys, ...envKeys];
   let activeUserKey: any = allKeys[0] || null;
