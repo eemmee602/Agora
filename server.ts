@@ -399,6 +399,64 @@ const defaultDB: DB = {
 // In-memory DB cache (persists across requests on same Vercel instance)
 let _db: DB | null = null;
 
+// Supabase persistence (survives Vercel cold starts)
+const SUPABASE_DB_TABLE = "agora_data";
+const SUPABASE_DB_KEY = "main";
+
+async function supabaseReadDB(): Promise<DB | null> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_DB_TABLE}?key=eq.${encodeURIComponent(SUPABASE_DB_KEY)}&select=data`;
+    const resp = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!resp.ok) return null;
+    const rows = await resp.json() as any[];
+    if (!rows || rows.length === 0) return null;
+    return rows[0].data as DB;
+  } catch (err) {
+    console.error("[Supabase] readDB error:", err);
+    return null;
+  }
+}
+
+async function supabaseWriteDB(data: DB): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/${SUPABASE_DB_TABLE}?key=eq.${encodeURIComponent(SUPABASE_DB_KEY)}`;
+    const resp = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+      },
+      body: JSON.stringify({ data, updated_at: new Date().toISOString() }),
+    });
+    if (!resp.ok) {
+      // Row might not exist yet, try INSERT (upsert)
+      const insertResp = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_DB_TABLE}`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "apikey": SUPABASE_KEY,
+          "Content-Type": "application/json",
+          "Prefer": "return=minimal,resolution=merge-duplicates",
+        },
+        body: JSON.stringify({ key: SUPABASE_DB_KEY, data, updated_at: new Date().toISOString() }),
+      });
+      if (!insertResp.ok) console.error("[Supabase] writeDB insert failed:", insertResp.status);
+    }
+  } catch (err) {
+    console.error("[Supabase] writeDB error:", err);
+  }
+}
+
 function readDB(): DB {
   if (_db) return _db;
   try {
@@ -439,6 +497,25 @@ function writeDB(data: DB) {
   } catch (err) {
     console.error("Error writing database file", err);
   }
+  // Sync to Supabase (fire-and-forget, non-blocking)
+  supabaseWriteDB(data).catch(err => console.error("[Supabase] async writeDB error:", err));
+}
+
+// On cold start: try to restore DB from Supabase before serving requests
+if (SUPABASE_URL && SUPABASE_KEY) {
+  (async () => {
+    try {
+      const restored = await supabaseReadDB();
+      if (restored && restored.chats) {
+        _db = restored;
+        // Also write to local /tmp for fast subsequent reads
+        try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
+        console.log(`[Supabase] DB restored: ${restored.chats?.length || 0} chats, ${restored.users?.length || 0} users`);
+      }
+    } catch (err) {
+      console.error("[Supabase] cold start restore error:", err);
+    }
+  })();
 }
 
 // Global server Gemini configuration
