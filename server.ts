@@ -1622,6 +1622,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   // Build server-side env key list (from Vercel env vars) as fallback when DB has no keys
   // Multi-model providers: each key can try multiple models before moving to next provider
   const ENV_KEY_MAP: { env: string; provider: string; models: string[] }[] = [
+    // Mistral first — most reliable from Vercel serverless
+    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "GROQ_API_KEY", provider: "groq", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
     { env: "OPENROUTER_API_KEY", provider: "openrouter", models: [
       "google/gemini-2.5-flash",
@@ -1630,7 +1632,6 @@ app.post("/api/chats/:id/messages", async (req, res) => {
       "mistralai/mistral-7b-instruct",
       "deepseek/deepseek-chat",
     ] },
-    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
     { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
     // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
@@ -1956,9 +1957,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
             headers["X-Title"] = "Agora AI Hub";
           }
 
-          // For OpenRouter, try multiple free models in fallback
+          // For OpenRouter, try multiple free models in fallback (limited to 3 to avoid timeout)
           const modelsToTry = candidateKey.provider === "openrouter"
-            ? [modelUsed, "google/gemini-2.5-flash", "google/gemini-2.5-pro", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat", "mistralai/mistral-small-24b-instruct-2501"]
+            ? [modelUsed, "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"]
             : [modelUsed];
 
           // Tool-calling loop: we may need multiple iterations
