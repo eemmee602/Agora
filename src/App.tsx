@@ -35,6 +35,7 @@ export default function App() {
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [modelError, setModelError] = useState<string | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [serverLogs, setServerLogs] = useState<Array<{ type: string; message: string; source: string; timestamp: string }>>([]);
 
   // Auto load user from session storage for convenience on reload
   useEffect(() => {
@@ -308,6 +309,7 @@ export default function App() {
 
     setIsProcessing(true);
     setModelError(undefined);
+    setServerLogs([]);
 
     // Setup AbortController
     const controller = new AbortController();
@@ -393,6 +395,9 @@ export default function App() {
                 };
                 setActiveChat(currentChatWithStreaming);
                 setChats(prev => prev.map(c => c.id === activeChat.id ? currentChatWithStreaming : c));
+              } else if (parsed.type === "log") {
+                // Server log — display in real-time
+                setServerLogs(prev => [...prev, parsed.log]);
               } else if (parsed.type === "chunk") {
                 // A text chunk generated! Append to content
                 tempAiMsg.content += parsed.text;
@@ -762,6 +767,7 @@ export default function App() {
                 modelError={modelError}
                 onInterrupt={handleInterruptResponse}
                 onRetry={handleRetryLastMessage}
+                serverLogs={serverLogs}
               />
             </motion.div>
           )}

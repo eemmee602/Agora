@@ -539,6 +539,8 @@ async function callGeminiWithRetry(
 }
 
 // Log helper
+let _globalSendEvent: ((eventData: any) => void) | null = null;
+
 function addLog(type: "info" | "success" | "warning" | "error", message: string, source: string) {
   const db = readDB();
   db.logs.unshift({
@@ -551,6 +553,10 @@ function addLog(type: "info" | "success" | "warning" | "error", message: string,
   // Keep last 150 logs
   if (db.logs.length > 150) db.logs = db.logs.slice(0, 150);
   writeDB(db);
+  // Send to frontend in real-time if a stream is active
+  if (_globalSendEvent) {
+    try { _globalSendEvent({ type: "log", log: { type, message, source, timestamp: new Date().toISOString() } }); } catch {}
+  }
 }
 
 // ============================================
@@ -1147,6 +1153,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
       (res as any).flush();
     }
   };
+  // Connect addLog to the frontend stream
+  _globalSendEvent = sendEvent;
 
   // If this is the very first user message of the chat, automatically generate a title based on context
   const userMessages = chat.messages.filter(m => m.senderRole === "user");
@@ -1326,7 +1334,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
     { env: "COHERE_API_KEY", provider: "cohere", model: "command-r-plus" },
     { env: "GEMINI_API_KEY", provider: "google", model: "gemini-2.5-flash" },
     { env: "GOOGLE_API_KEY", provider: "google", model: "gemini-2.5-flash" },
-    { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
+    // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
+    // { env: "OPENAI_API_KEY", provider: "openai", model: "gpt-4o-mini" },
     { env: "TOGETHER_API_KEY", provider: "together", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
     { env: "DEEPSEEK_API_KEY", provider: "deepseek", model: "deepseek-chat" },
     { env: "PERPLEXITY_API_KEY", provider: "perplexity", model: "llama-3.1-sonar-small-128k-online" },
@@ -1523,7 +1532,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
         }
       }
       actualModelUsed = modelUsed;
-      addLog("info", `Utilisation de la clé API client (${candidateKey.name}) avec le modèle ${modelUsed}.`, "Passerelle API");
+      addLog("info", `Clé ${candidateKey.name} → modèle ${modelUsed}`, "API");
       
       try {
         // Provider API endpoints (OpenAI-compatible)
@@ -1850,9 +1859,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
       );
     }
   } catch (error: any) {
-    console.error("Error running AI model pipeline, falling back to simulated high-quality response:", error);
-    addLog("warning", "Erreur réseau API. Génération du modèle de secours local.", "Agora Gateway");
-    actualModelUsed = "Orchestrateur Local (Simulé)";
+    console.error("Erreur API, fallback simulé:", error);
+    addLog("warning", "Toutes les clés API ont échoué. Réponse de secours.", "Système");
+    actualModelUsed = "Secours (hors ligne)";
     
     let keyInfo = "";
     const isQuotaExceeded = error?.message?.includes("Quota exceeded") || 
@@ -1862,20 +1871,20 @@ Sois concis, chaleureux, structuré et professionnel.`;
                             String(error).includes("Quota");
 
     if (activeUserKey) {
-      keyInfo = `\n\n⚠️ **Note de l'Orchestrateur (Quota/Limites)** : La requête vers votre clé API client active **"${activeUserKey.name}"** (${activeUserKey.provider}) a échoué (Erreur: *${customKeyError || "Quota dépassé (429)"}*). Nous avons basculé temporairement sur notre simulateur d'agents de secours.\n\n💡 **Comment résoudre ?** Si vous utilisez une clé gratuite Google Gemini, elle est limitée à 15 requêtes par minute et un petit quota quotidien. Nous vous conseillons de mettre à jour votre clé ou d'ajouter une clé payante ou OpenRouter dans l'onglet **Clés** pour débloquer de plus grands volumes de requêtes.`;
+      keyInfo = `\n\n⚠️ **Erreur** : La clé API "${activeUserKey.name}" (${activeUserKey.provider}) a échoué (${customKeyError || "Quota dépassé"}). Une réponse de secours a été générée.\n\n💡 Ajoutez une clé API valide dans l'onglet **Clés** pour utiliser la vraie IA.`;
     } else if (isQuotaExceeded) {
-      keyInfo = `\n\n⚠️ **Avis de Quota Dépassé (429 RESOURCE_EXHAUSTED)** : La clé API système partagée a temporairement atteint sa limite gratuite quotidienne imposée par Google (limite stricte de 20 requêtes par jour sur le modèle gratuit).\n\n💡 **Comment continuer gratuitement en 1 minute ?**\n1. Rendez-vous sur la console [Google AI Studio](https://aistudio.google.com/) pour obtenir votre propre clé API Gemini gratuite.\n2. Allez dans l'onglet **Clés** de cette application.\n3. Cliquez sur **Ajouter une clé**, renseignez votre clé avec le fournisseur **Google**, puis activez-la !\n\nVous disposerez ainsi de vos propres quotas individuels complets et gratuits sans aucune interruption !`;
+      keyInfo = `\n\n⚠️ **Quota dépassé (429)** : La clé API système a atteint sa limite gratuite quotidienne.\n\n💡 Ajoutez votre propre clé API (Google, Groq, OpenRouter...) dans l'onglet **Clés** pour continuer sans limite.`;
     } else {
-      keyInfo = `\n\n⚠️ **Note technique (Gateway)** : Aucune clé API personnelle active n'a été trouvée sur votre compte. Vous utilisez actuellement notre quota local de secours. Pour débloquer la puissance totale des modèles (Llama, Claude, Gemini), configurez votre clé API personnelle dans l'onglet **Clés**.`;
+      keyInfo = `\n\n⚠️ **Aucune clé API active**. Vous utilisez le mode de secours. Configurez une clé API dans l'onglet **Clés** pour activer la vraie IA.`;
     }
 
     if (requiresCode) {
-      finalAiResponse = `Voici le script demandé par notre agent **Codeur A∀-02**. Il a été vérifié par notre agent de **Sécurité A∀-03** pour s'assurer qu'il s'exécute dans un bac à sables parfaitement étanche.\n\n### Explication du script:\n1. Le code initialise les modules requis.\n2. Il configure un point d'écoute ou une fonction de boucle principale pour maximiser la vitesse de traitement.\n3. Il gère proprement les erreurs d'exécution pour éviter les fuites de quota API.${keyInfo}`;
+      finalAiResponse = `Voici un script généré par le mode de secours (aucune clé API valide). Le code ci-dessous est une structure de base.${keyInfo}`;
     } else if (requiresSearch) {
-      finalAiResponse = `J'ai recherché les informations les plus récentes sur le web concernant votre demande. Nos agents ont extrait plusieurs articles de référence de haute qualité.\n\nSelon nos recherches, Agora Ai se positionne comme un tableau de bord collaboratif d'avant-garde. Nous avons indexé les sources ci-dessous pour que vous puissiez explorer le sujet en profondeur.${keyInfo}`;
+      finalAiResponse = `Recherche impossible sans clé API valide. Ajoutez une clé dans l'onglet Clés pour activer la recherche web.${keyInfo}`;
     } else {
       if (hasPreviousAgentMessage) {
-        finalAiResponse = `Votre demande a été traitée avec succès par notre arbre d'agents spécialisés. L'Architecte A∀-01 a coordonné l'action de manière optimale pour répondre à votre question.\n\nN'hésitez pas à me poser d'autres questions spécifiques, ou à me demander d'effectuer des recherches sur le web.${keyInfo}`;
+        finalAiResponse = `Je n'ai pas pu traiter votre demande car aucune clé API n'a fonctionné. Ajoutez une clé API valide dans l'onglet **Clés**.${keyInfo}`;
       } else {
         finalAiResponse = `Je n'ai pas pu traiter votre demande. Vérifiez vos clés API dans les paramètres.${keyInfo}`;
       }
@@ -2000,6 +2009,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
     quotaLimit: user.quotaLimit
   });
 
+  _globalSendEvent = null;
   res.end();
 });
 

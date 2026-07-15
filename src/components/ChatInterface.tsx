@@ -24,6 +24,7 @@ interface ChatInterfaceProps {
   modelError?: string;
   onInterrupt?: () => void;
   onRetry?: () => void;
+  serverLogs?: Array<{ type: string; message: string; source: string; timestamp: string }>;
 }
 
 const welcomeGlowStyle = {
@@ -50,7 +51,8 @@ export default function ChatInterface({
   isProcessing,
   modelError,
   onInterrupt,
-  onRetry
+  onRetry,
+  serverLogs
 }: ChatInterfaceProps) {
   const [inputText, setInputText] = useState("");
   const [copiedFileId, setCopiedFileId] = useState<string | null>(null);
@@ -166,85 +168,30 @@ export default function ChatInterface({
     }
   }, [activeChat?.id]);
 
-  // Generate live logs step-by-step during API orchestration waiting phase
+  // Use server logs from SSE stream instead of fake simulated logs
   useEffect(() => {
-    if (isProcessing) {
-      setLiveOrchestrationLogs([
-        { text: `[Architecte A∀-01] Analyse sémantique de la requête de ${currentUser.username}...`, color: "text-indigo-400" }
-      ]);
-
-      const lastUserMsg = activeChat?.messages && activeChat.messages.length > 0
-        ? activeChat.messages[activeChat.messages.length - 1]
-        : null;
-
-      const lowerText = lastUserMsg?.content.toLowerCase() || "";
-      const hasImage = lastUserMsg?.attachments?.some(a => a.type === "image") ||
-                       lowerText.includes("image") ||
-                       lowerText.includes("photo") ||
-                       lowerText.includes("visuel") ||
-                       lowerText.includes("dessin");
-
-      const hasSearch = lowerText.includes("cherche") ||
-                        lowerText.includes("recherche") ||
-                        lowerText.includes("web") ||
-                        lowerText.includes("meteo") ||
-                        lowerText.includes("qui est") ||
-                        lowerText.includes("actualité") ||
-                        lowerText.includes("nouvelle");
-
-      const hasCode = lowerText.includes("code") ||
-                      lowerText.includes("écris") ||
-                      lowerText.includes("génère") ||
-                      lowerText.includes("script") ||
-                      lowerText.includes("lua") ||
-                      lowerText.includes("python") ||
-                      lowerText.includes("html") ||
-                      lowerText.includes("css") ||
-                      lowerText.includes("js") ||
-                      lowerText.includes("programme");
-
-      let logSteps = [
-        { text: `[Architecte A∀-01] Traitement du contexte conversationnel direct...`, color: "text-indigo-400", delay: 1100 },
-        { text: `[Architecte A∀-01] Analyse de la mémoire d'Emerick pour adapter le ton...`, color: "text-purple-400", delay: 2400 },
-        { text: `[Architecte A∀-01] Formulation de la réponse finale en cours...`, color: "text-emerald-400", delay: 3800 }
-      ];
-
-      if (hasImage) {
-        logSteps = [
-          { text: `[Vision A∀-05] Capture de flux visuel et décompression sémantique...`, color: "text-indigo-400", delay: 1100 },
-          { text: `[Vision A∀-05] Analyse multi-modale en cours : Évaluation de la résolution et filtrage des contrastes...`, color: "text-cyan-400", delay: 2200 },
-          { text: `[Vision A∀-05] Exécution OCR et repérage d'objets dans la scène visuelle...`, color: "text-emerald-400", delay: 3300 },
-          { text: `[Architecte A∀-01] Synthèse sémantique de l'image et préparation de la description textuelle...`, color: "text-purple-400", delay: 4500 }
-        ];
-      } else if (hasSearch) {
-        logSteps = [
-          { text: `[Chercheur A∀-04] Connexion au protocole MCP et services de recherche...`, color: "text-cyan-400", delay: 1100 },
-          { text: `[Chercheur A∀-04] Interrogation des moteurs d'indexation web...`, color: "text-cyan-400", delay: 2200 },
-          { text: `[Chercheur A∀-04] Extraction et évaluation de la pertinence des articles trouvés...`, color: "text-emerald-400", delay: 3300 },
-          { text: `[Architecte A∀-01] Compilation des résultats de recherche pour la synthèse...`, color: "text-indigo-400", delay: 4500 }
-        ];
-      } else if (hasCode) {
-        logSteps = [
-          { text: `[Architecte A∀-01] Attribution : Routage sémantique vers l'agent Codeur A∀-02...`, color: "text-indigo-400", delay: 1100 },
-          { text: `[Codeur A∀-02] Synthèse contextuelle et élaboration de la structure algorithmique...`, color: "text-emerald-400", delay: 2200 },
-          { text: `[Codeur A∀-02] Génération du script et formatage de la syntaxe...`, color: "text-emerald-400", delay: 3300 },
-          { text: `[Sécurité A∀-03] Validation des règles logiques et confinement en sandbox...`, color: "text-pink-400", delay: 4500 }
-        ];
-      }
-
-      const timers = logSteps.map(step => {
-        return setTimeout(() => {
-          setLiveOrchestrationLogs(prev => [...prev, { text: step.text, color: step.color }]);
-        }, step.delay);
-      });
-
-      return () => {
-        timers.forEach(clearTimeout);
-      };
-    } else {
+    if (!isProcessing) {
       setLiveOrchestrationLogs([]);
     }
-  }, [isProcessing, currentUser, activeChat?.messages]);
+  }, [isProcessing]);
+
+  // Map server log types to colors
+  const logColorMap: Record<string, string> = {
+    info: "text-indigo-400",
+    success: "text-emerald-400",
+    warning: "text-amber-400",
+    error: "text-red-400",
+  };
+
+  // When server logs arrive, display them
+  useEffect(() => {
+    if (serverLogs && serverLogs.length > 0) {
+      setLiveOrchestrationLogs(serverLogs.map(l => ({
+        text: `[${l.source}] ${l.message}`,
+        color: logColorMap[l.type] || "text-gray-400"
+      })));
+    }
+  }, [serverLogs]);
 
   // Smart Auto Scroll handler
   const prevIsProcessing = useRef(isProcessing);
@@ -884,9 +831,9 @@ export default function ChatInterface({
                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                           </span>
-                          <span className="font-mono text-[10px] uppercase tracking-wider text-indigo-300 font-bold">Orchestrateur Agora A∀-01</span>
+                          <span className="font-mono text-[10px] uppercase tracking-wider text-indigo-300 font-bold">Agora AI</span>
                         </div>
-                        <span className="text-[9px] font-mono text-gray-500">Actif (Gateway MCP)</span>
+                        <span className="text-[9px] font-mono text-gray-500">En cours</span>
                       </div>
 
                       {/* Log output rows */}
@@ -905,7 +852,7 @@ export default function ChatInterface({
                         
                         <div className="flex items-center space-x-1.5 text-indigo-400 animate-pulse text-[10px] pt-1">
                           <span className="w-1.5 h-3 bg-indigo-400 inline-block animate-pulse shrink-0" />
-                          <span className="italic">Génération du flux final de l'orchestrateur...</span>
+                          <span className="italic">Génération de la réponse...</span>
                         </div>
                       </div>
 
