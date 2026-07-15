@@ -83,6 +83,78 @@ async function upsertUserMemory(entry: MemoryEntry): Promise<boolean> {
   }
 }
 
+// ─── Model Cache (avoid spamming failed providers) ───
+async function getModelCache(userId: string): Promise<Record<string, { last_success?: string; last_failure?: string; fail_count: number }>> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return {};
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_model_cache?user_id=eq.${encodeURIComponent(userId)}`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (!resp.ok) return {};
+    const rows = await resp.json() as any[];
+    const cache: Record<string, any> = {};
+    for (const r of rows) {
+      cache[`${r.provider}/${r.model}`] = r;
+    }
+    return cache;
+  } catch { return {}; }
+}
+
+async function recordModelSuccess(userId: string, provider: string, model: string): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/agora_model_cache?on_conflict=user_id,provider,model`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ user_id: userId, provider, model, last_success: new Date().toISOString(), fail_count: 0 }),
+    });
+  } catch {}
+}
+
+async function recordModelFailure(userId: string, provider: string, model: string): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/agora_model_cache?user_id=eq.${encodeURIComponent(userId)}&provider=eq.${encodeURIComponent(provider)}&model=eq.${encodeURIComponent(model)}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    if (resp.ok) {
+      const rows = await resp.json() as any[];
+      const current = rows[0];
+      const newFail = (current?.fail_count || 0) + 1;
+      await fetch(`${SUPABASE_URL}/rest/v1/agora_model_cache?on_conflict=user_id,provider,model`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({ user_id: userId, provider, model, last_failure: new Date().toISOString(), fail_count: newFail }),
+      });
+    }
+  } catch {}
+}
+
+// ─── Scheduled Task Helpers ───
+async function getPendingTasks(): Promise<any[]> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return [];
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_scheduled_tasks?status=eq.pending&execute_at=lte.${new Date().toISOString()}&order=execute_at.asc&limit=10`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (!resp.ok) return [];
+    return await resp.json();
+  } catch { return []; }
+}
+
+async function markTaskDone(taskId: string, result: string): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/agora_scheduled_tasks?id=eq.${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "completed", result: result.substring(0, 5000), completed_at: new Date().toISOString() }),
+    });
+  } catch {}
+}
+
 async function deleteUserMemory(userId: string, memoryId: string): Promise<boolean> {
   if (!SUPABASE_URL || !SUPABASE_KEY) return false;
   try {
@@ -714,6 +786,21 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         required: ["code"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "schedule_task",
+      description: "Programme une tâche à exécuter automatiquement à une heure future. L'IA reçoit le prompt à l'heure spécifiée et l'exécute comme si l'utilisateur l'avait tapé. Ex: 'à 15h rappelle-moi de manger', 'dans 2h cherche les news du jour'.",
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "Le prompt/tâche à exécuter à l'heure prévue" },
+          execute_at: { type: "string", description: "Heure d'exécution au format ISO 8601 (ex: 2026-07-15T15:00:00) ou relatif (ex: 'dans 2h', 'à 15h', 'dans 30min')" }
+        },
+        required: ["prompt", "execute_at"]
+      }
+    }
   }
 ];
 
@@ -835,6 +922,79 @@ async function executeTool(name: string, args: any): Promise<{ success: boolean;
         } catch (err: any) {
           return { success: false, result: `Erreur d'exécution: ${err.message}` };
         }
+      }
+
+      case "schedule_task": {
+        const { prompt: taskPrompt, execute_at } = args;
+        if (!taskPrompt || !execute_at) return { success: false, result: "Prompt et execute_at requis" };
+
+        // Parse the execute_at field
+        let executeDate: Date | null = null;
+        const now = new Date();
+
+        // Try relative formats: "dans 2h", "dans 30min", "dans 1h30"
+        const relMatch = execute_at.match(/dans\s+(\d+(?:h\d*)?(?:min)?)/i);
+        if (relMatch) {
+          const timeStr = relMatch[1];
+          const hoursMatch = timeStr.match(/(\d+)h(\d*)/);
+          const minMatch = timeStr.match(/(\d+)min/);
+          let hours = 0, mins = 0;
+          if (hoursMatch) { hours = parseInt(hoursMatch[1]); if (hoursMatch[2]) mins += parseInt(hoursMatch[2]); }
+          if (minMatch) { mins += parseInt(minMatch[1]); }
+          executeDate = new Date(now.getTime() + hours * 3600000 + mins * 60000);
+        }
+
+        // Try "à 15h" or "a 15h30" format
+        if (!executeDate) {
+          const atMatch = execute_at.match(/[àa]\s+(\d+)h(\d*)/i);
+          if (atMatch) {
+            const h = parseInt(atMatch[1]);
+            const m = atMatch[2] ? parseInt(atMatch[2]) : 0;
+            executeDate = new Date(now);
+            executeDate.setHours(h, m, 0, 0);
+            if (executeDate <= now) executeDate.setDate(executeDate.getDate() + 1);
+          }
+        }
+
+        // Try ISO 8601
+        if (!executeDate) {
+          const parsed = new Date(execute_at);
+          if (!isNaN(parsed.getTime())) executeDate = parsed;
+        }
+
+        if (!executeDate) return { success: false, result: `Format d'heure non reconnu: "${execute_at}". Utilise: 'dans 2h', 'à 15h', 'dans 30min', ou ISO 8601 (2026-07-15T15:00:00)` };
+
+        // Save to Supabase
+        if (SUPABASE_URL && SUPABASE_KEY) {
+          try {
+            const resp = await fetch(`${SUPABASE_URL}/rest/v1/agora_scheduled_tasks`, {
+              method: "POST",
+              headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${SUPABASE_KEY}`,
+                "Content-Type": "application/json",
+                Prefer: "return=representation",
+              },
+              body: JSON.stringify({
+                user_id: "admin-emerick",
+                prompt: taskPrompt,
+                execute_at: executeDate.toISOString(),
+                status: "pending",
+              }),
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              const taskId = data[0]?.id || "?";
+              const timeStr = executeDate.toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" });
+              const dateStr = executeDate.toLocaleDateString("fr-CA");
+              return { success: true, result: `Tâche programmée pour le ${dateStr} à ${timeStr}. ID: ${taskId}. L'IA exécutera automatiquement: "${taskPrompt.substring(0, 100)}"` };
+            }
+            return { success: false, result: `Erreur Supabase: ${resp.status}` };
+          } catch (err: any) {
+            return { success: false, result: `Erreur: ${err.message}` };
+          }
+        }
+        return { success: false, result: "Base de données non configurée" };
       }
 
       default:
@@ -1453,6 +1613,42 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const allKeys = [...activeUserKeys, ...envKeys];
   let activeUserKey: any = allKeys[0] || null;
 
+  // Load model cache to skip recently-failed providers (avoid spamming)
+  const modelCache = await getModelCache(user.id);
+  const RECENT_FAIL_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after failure
+  const nowMs = Date.now();
+  const skipKeys = new Set<string>();
+  for (const [key, entry] of Object.entries(modelCache)) {
+    if (entry.fail_count >= 3) {
+      // Permanent skip after 3 fails (until a success resets it)
+      skipKeys.add(key);
+    } else if (entry.last_failure) {
+      const failTime = new Date(entry.last_failure).getTime();
+      if (nowMs - failTime < RECENT_FAIL_COOLDOWN_MS && !entry.last_success) {
+        skipKeys.add(key);
+      }
+    }
+  }
+
+  // Reorder keys: successful providers first, then untried, then failed
+  const orderedKeys = allKeys.sort((a, b) => {
+    const aKey = `${a.provider}/${a.model}`;
+    const bKey = `${b.provider}/${b.model}`;
+    const aCache = modelCache[aKey];
+    const bCache = modelCache[bKey];
+    const aSkip = skipKeys.has(aKey);
+    const bSkip = skipKeys.has(bKey);
+    if (aSkip && !bSkip) return 1;
+    if (!aSkip && bSkip) return -1;
+    // Prefer keys with recent success
+    if (aCache?.last_success && bCache?.last_success) {
+      return new Date(bCache.last_success).getTime() - new Date(aCache.last_success).getTime();
+    }
+    if (aCache?.last_success) return -1;
+    if (bCache?.last_success) return 1;
+    return 0;
+  });
+
   // Check if there are any previous agent messages to suppress repetitive greetings
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
 
@@ -1495,6 +1691,13 @@ PRINCIPES DE COMMUNICATION :
 
 4. **execute_code** : Exécute du code JavaScript en sandbox (5s max, pas de réseau/fs).
    - Calculs complexes, manipulation de données, parsing JSON, etc.
+
+5. **schedule_task** : Programme une tâche à exécuter automatiquement à une heure future.
+   - L'utilisateur peut dire "à 15h rappelle-moi de manger", "dans 2h cherche les news", "à 3h du matin fais un résumé du jour".
+   - Paramètres: prompt (la tâche à exécuter), execute_at (format: "dans 2h", "à 15h", "dans 30min", ou ISO 8601).
+   - La tâche s'exécute AUTOMATIQUEMENT à l'heure prévue — l'utilisateur n'a pas besoin d'être connecté.
+   - Le résultat est sauvegardé et visible dans la section "Tâches programmées" de l'interface.
+   - UTILISE CET OUTIL quand l'utilisateur dit "à X heure", "dans X heures/min", "programme", "rappelle-moi à", "fais ça plus tard".
 
 RÈGLE CRITIQUE : Quand l'utilisateur te demande d'envoyer quelque chose quelque part (webhook, API, serveur), UTILISE http_request. Ne dis JAMAIS "je ne peux pas" si tu as l'outil http_request disponible. Dis "je ne peux pas" UNIQUEMENT si c'est techniquement impossible (URL interne/bloquée).
 
@@ -1623,8 +1826,14 @@ Sois concis, chaleureux, structuré et professionnel.`;
   };
   
   try {
-    for (const candidateKey of allKeys) {
+    for (const candidateKey of orderedKeys) {
       activeUserKey = candidateKey;
+      // Skip providers that recently failed (cooldown)
+      const cacheKey = `${candidateKey.provider}/${candidateKey.model}`;
+      if (skipKeys.has(cacheKey)) {
+        addLog("info", `Skip ${candidateKey.provider}/${candidateKey.model} (échec récent, cooldown 5min)`, "Passerelle API");
+        continue;
+      }
       // For env-based keys, always use their default model. For user keys, respect chat.activeModel.
       if (candidateKey.id.startsWith("env-")) {
         modelUsed = candidateKey.model;
@@ -1819,8 +2028,10 @@ Sois concis, chaleureux, structuré et professionnel.`;
                       candidateKey.active = false;
                       writeDB(db);
                     }
+                    await recordModelFailure(user.id, candidateKey.provider, tryModel);
                     addLog("warning", `Clé API "${candidateKey.name}" invalide (${status}).`, "Passerelle API");
                   } else {
+                    await recordModelFailure(user.id, candidateKey.provider, tryModel);
                     addLog("warning", `Clé API "${candidateKey.name}" a retourné ${status} sur ${tryModel}. Bascule modèle suivant.`, "Passerelle API");
                   }
                   lastErr = new Error(`API ${status}: ${bodyText}`);
@@ -1833,7 +2044,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
               console.warn(`Model ${tryModel} failed:`, err.message);
             }
           }
-          if (finalAiResponse) { customKeyError = ""; break; }
+          if (finalAiResponse) { customKeyError = ""; 
+            await recordModelSuccess(user.id, candidateKey.provider, modelUsed);
+            break; }
           if (lastErr) throw lastErr;
         } else if (candidateKey.provider === "google") {
           // Gemini with tool calling support
@@ -1945,6 +2158,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
           }
           // Success: stop trying other keys
           customKeyError = "";
+          await recordModelSuccess(user.id, candidateKey.provider, candidateKey.model);
           break;
         }
       } catch (err: any) {
@@ -2124,6 +2338,163 @@ Sois concis, chaleureux, structuré et professionnel.`;
 
   _globalSendEvent = null;
   res.end();
+});
+
+// ─── Cron Endpoint: Check & Execute Scheduled Tasks ───
+app.get("/api/cron/check-tasks", async (req, res) => {
+  const cronSecret = req.headers["x-cron-secret"] || req.query.secret;
+  if (cronSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const tasks = await getPendingTasks();
+    if (tasks.length === 0) {
+      return res.json({ status: "ok", message: "No pending tasks", executed: 0 });
+    }
+
+    addLog("info", `${tasks.length} tâche(s) programmée(s) à exécuter`, "Planificateur");
+    let executed = 0;
+    const results: any[] = [];
+
+    for (const task of tasks) {
+      try {
+        // Mark as running
+        await fetch(`${SUPABASE_URL}/rest/v1/agora_scheduled_tasks?id=eq.${task.id}`, {
+          method: "PATCH",
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+          body: JSON.stringify({ status: "running" }),
+        });
+
+        addLog("info", `Exécution tâche programmée: "${task.prompt.substring(0, 80)}"`, "Planificateur");
+
+        // Execute the task as if the user sent it — call the AI directly
+        const taskResult = await executeScheduledTask(task);
+
+        await markTaskDone(task.id, taskResult);
+        executed++;
+        results.push({ id: task.id, prompt: task.prompt.substring(0, 100), status: "completed", resultLength: taskResult.length });
+        addLog("success", `Tâche "${task.prompt.substring(0, 50)}" terminée`, "Planificateur");
+      } catch (err: any) {
+        await markTaskDone(task.id, `Erreur: ${err.message}`);
+        results.push({ id: task.id, status: "error", error: err.message });
+        addLog("error", `Tâche ${task.id} a échoué: ${err.message}`, "Planificateur");
+      }
+    }
+
+    res.json({ status: "ok", executed, results });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Execute a scheduled task by calling the AI internally
+async function executeScheduledTask(task: any): Promise<string> {
+  // Build a minimal AI call with the task prompt
+  const db = readDB();
+  const user = db.users.find(u => u.id === task.user_id) || db.users[0];
+  if (!user) return "Erreur: utilisateur non trouvé";
+
+  // Use the same provider logic as the main chat endpoint
+  const memories = await loadUserMemories(user.id);
+  let systemPrompt = `Tu es Agora Ai, un assistant IA français intelligent. Réponds directement à la demande. C'est une tâche programmée qui s'exécute automatiquement.`;
+  if (memories.length > 0) {
+    systemPrompt += `\n\n[MÉMOIRE] :\n${formatMemoriesForPrompt(memories)}`;
+  }
+  systemPrompt += `\n\nCette demande a été programmée par l'utilisateur. Exécute-la et fournis le résultat.`;
+
+  const messages = [{ role: "user", content: task.prompt }];
+
+  // Try each provider (simplified — no streaming, no tools)
+  const ENV_KEY_MAP: { env: string; provider: string; models: string[] }[] = [
+    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
+    { env: "GROQ_API_KEY", provider: "groq", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
+    { env: "OPENROUTER_API_KEY", provider: "openrouter", models: ["google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"] },
+    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
+  ];
+
+  const API_ENDPOINTS: Record<string, string> = {
+    mistral: "https://api.mistral.ai/v1/chat/completions",
+    groq: "https://api.groq.com/openai/v1/chat/completions",
+    openrouter: "https://openrouter.ai/api/v1/chat/completions",
+    cohere: "https://api.cohere.com/v2/chat",
+  };
+
+  for (const providerDef of ENV_KEY_MAP) {
+    const key = process.env[providerDef.env];
+    if (!key || key.trim().length < 5) continue;
+
+    for (const model of providerDef.models) {
+      try {
+        const apiUrl = API_ENDPOINTS[providerDef.provider];
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${key}`,
+        };
+        if (providerDef.provider === "openrouter") {
+          headers["HTTP-Referer"] = "https://agora-ai-clean.vercel.app";
+          headers["X-Title"] = "Agora AI";
+        }
+
+        const body: any = {
+          model,
+          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          stream: false,
+        };
+
+        const resp = await fetch(apiUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          const text = data.choices?.[0]?.message?.content || data.text || "";
+          if (text) {
+            await recordModelSuccess(user.id, providerDef.provider, model);
+            return text;
+          }
+        }
+        await recordModelFailure(user.id, providerDef.provider, model);
+      } catch {
+        // try next
+      }
+    }
+  }
+
+  return "Aucun provider disponible pour exécuter la tâche programmée.";
+}
+
+// ─── Scheduled Tasks API: List/Create/Delete ───
+app.get("/api/scheduled-tasks/:userId", async (req, res) => {
+  const { userId } = req.params;
+  if (!SUPABASE_URL || !SUPABASE_KEY) return res.json([]);
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_scheduled_tasks?user_id=eq.${encodeURIComponent(userId)}&order=execute_at.desc&limit=50`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (resp.ok) return res.json(await resp.json());
+    res.status(resp.status).json({ error: "Failed" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/scheduled-tasks/:taskId", async (req, res) => {
+  const { taskId } = req.params;
+  if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: "No DB" });
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_scheduled_tasks?id=eq.${encodeURIComponent(taskId)}`,
+      { method: "DELETE", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (resp.ok) return res.json({ success: true });
+    res.status(resp.status).json({ error: "Failed" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Start server/Vite middleware setup
