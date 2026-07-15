@@ -10,6 +10,173 @@ if (process.env.VERCEL !== "1") {
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
+// ─── Supabase Persistent Memory System ───
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.EMERICK_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.EMERICK_SUPABASE_SERVICE_ROLE_KEY || "";
+
+interface MemoryEntry {
+  id?: string;
+  user_id: string;
+  category: "preferences" | "context" | "facts" | "observation";
+  source: "user_stated" | "ai_observed";
+  content: string;
+  confidence: number;
+  times_referenced: number;
+  last_referenced_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+async function loadUserMemories(userId: string): Promise<MemoryEntry[]> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return [];
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?user_id=eq.${encodeURIComponent(userId)}&order=confidence.desc,updated_at.desc`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    if (!resp.ok) {
+      console.error("[Memory] Load failed:", resp.status, await resp.text().catch(() => ""));
+      return [];
+    }
+    return (await resp.json()) as MemoryEntry[];
+  } catch (err) {
+    console.error("[Memory] Load error:", err);
+    return [];
+  }
+}
+
+async function upsertUserMemory(entry: MemoryEntry): Promise<boolean> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return false;
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?on_conflict=user_id,content`,
+      {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates,return=minimal",
+        },
+        body: JSON.stringify({
+          user_id: entry.user_id,
+          category: entry.category,
+          source: entry.source,
+          content: entry.content,
+          confidence: entry.confidence,
+        }),
+      }
+    );
+    if (!resp.ok) {
+      console.error("[Memory] Upsert failed:", resp.status);
+    }
+    return resp.ok;
+  } catch (err) {
+    console.error("[Memory] Upsert error:", err);
+    return false;
+  }
+}
+
+async function deleteUserMemory(userId: string, memoryId: string): Promise<boolean> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return false;
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?id=eq.${encodeURIComponent(memoryId)}&user_id=eq.${encodeURIComponent(userId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+    return resp.ok;
+  } catch (err) {
+    console.error("[Memory] Delete error:", err);
+    return false;
+  }
+}
+
+async function deleteMemoryByContent(userId: string, contentPattern: string): Promise<number> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return 0;
+  try {
+    // Use ilike for partial match
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?user_id=eq.${encodeURIComponent(userId)}&content=ilike.${encodeURIComponent(`%${contentPattern}%`)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Prefer: "return=representation",
+        },
+      }
+    );
+    if (resp.ok) {
+      const deleted = await resp.json();
+      return Array.isArray(deleted) ? deleted.length : 0;
+    }
+    return 0;
+  } catch (err) {
+    console.error("[Memory] Delete by content error:", err);
+    return 0;
+  }
+}
+
+async function clearAllUserMemories(userId: string): Promise<boolean> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return false;
+  try {
+    const resp = await fetch(
+      `${SUPABASE_URL}/rest/v1/agora_user_memories?user_id=eq.${encodeURIComponent(userId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
+    return resp.ok;
+  } catch (err) {
+    console.error("[Memory] Clear all error:", err);
+    return false;
+  }
+}
+
+function formatMemoriesForPrompt(memories: MemoryEntry[]): string {
+  if (memories.length === 0) return "";
+
+  const byCategory: Record<string, MemoryEntry[]> = {};
+  for (const m of memories) {
+    if (!byCategory[m.category]) byCategory[m.category] = [];
+    byCategory[m.category].push(m);
+  }
+
+  const categoryLabels: Record<string, string> = {
+    preferences: "PRÉFÉRENCES",
+    context: "CONTEXTE",
+    facts: "FAITS",
+    observation: "OBSERVATIONS DE L'AI",
+  };
+
+  let result = "";
+  for (const [cat, entries] of Object.entries(byCategory)) {
+    const label = categoryLabels[cat] || cat.toUpperCase();
+    result += `\n${label}:\n`;
+    for (const e of entries) {
+      const conf = e.confidence >= 2 ? "★" : e.confidence >= 1.5 ? "☆" : "";
+      const src = e.source === "ai_observed" ? " (observé)" : "";
+      result += `- ${e.content}${src} ${conf}\n`;
+    }
+  }
+  return result.trim();
+}
 
 const app = express();
 const PORT = 3000;
@@ -886,6 +1053,39 @@ app.post("/api/users/:userId/preferences", (req, res) => {
   res.status(404).json({ error: "Utilisateur non trouvé" });
 });
 
+// ─── Persistent Memory Endpoints ───
+
+// Get all memories for a user
+app.get("/api/users/:userId/memories", async (req, res) => {
+  const userId = req.params.userId;
+  const memories = await loadUserMemories(userId);
+  res.json(memories);
+});
+
+// Delete a specific memory by ID
+app.delete("/api/users/:userId/memories/:memoryId", async (req, res) => {
+  const { userId, memoryId } = req.params;
+  const success = await deleteUserMemory(userId, memoryId);
+  if (success) {
+    addLog("info", `Mémoire supprimée pour ${userId}.`, "Mémoire Persistante");
+    res.json({ success: true });
+  } else {
+    res.status(500).json({ error: "Échec de suppression" });
+  }
+});
+
+// Clear all memories for a user
+app.delete("/api/users/:userId/memories", async (req, res) => {
+  const userId = req.params.userId;
+  const success = await clearAllUserMemories(userId);
+  if (success) {
+    addLog("warning", `Toutes les mémoires effacées pour ${userId}.`, "Mémoire Persistante");
+    res.json({ success: true });
+  } else {
+    res.status(500).json({ error: "Échec d'effacement" });
+  }
+});
+
 // Logs: Fetch system logs
 app.get("/api/logs", (req, res) => {
   const db = readDB();
@@ -1163,11 +1363,11 @@ PRINCIPES DE COMMUNICATION :
 - Adapte ton niveau de détail à la demande : question simple = réponse simple, question complexe = réponse structurée.
 - Si tu as fait une action (outil, requête, code), rappelle-le brièvement dans ta réponse pour que l'utilisateur sache ce qui a été fait.`;
 
-  if (user.memory) {
-    const mem = user.memory.length > MEMORY_MAX_LENGTH
-      ? user.memory.substring(0, MEMORY_MAX_LENGTH)
-      : user.memory;
-    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR] :\n${mem}\nAdapte-toi impérativement à ses préférences et son contexte ci-dessus. Utilise ces informations pour personnaliser tes réponses sans forcément les répéter ou les justifier. Si tu apprends de nouvelles informations sur l'utilisateur, mets à jour sa mémoire.`;
+  // Load persistent memories from Supabase
+  const memories = await loadUserMemories(user.id);
+  if (memories.length > 0) {
+    const memText = formatMemoriesForPrompt(memories);
+    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR — PERSISTANTE] :\n${memText}\n\nAdapte-toi impérativement à ces informations. Personnalise tes réponses sans forcément répéter ou justifier ces connaissances. Sois naturel : si l'utilisateur a une préférence, applique-la sans la mentionner.`;
   }
 
   // Update system prompt to inform the AI about available tools
@@ -1196,13 +1396,38 @@ RÈGLE CRITIQUE : Quand l'utilisateur te demande d'envoyer quelque chose quelque
 Après avoir reçu le résultat d'un outil, utilise ces informations pour formuler ta réponse finale à l'utilisateur. Tu peux appeler plusieurs outils de suite.`;
 
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
-Si l'utilisateur te confie des détails importants sur lui (comme ses préférences de code, sa profession, ses projets, ce qu'il aime ou veut retenir), tu dois mettre à jour sa mémoire. Pour ce faire, intègre à la TOUTE FIN de ta réponse la balise XML suivante :
-<update_memory>Texte de la mémoire mise à jour consolidant toutes les informations actuelles et nouvelles apprises sur l'utilisateur de manière concise et claire.</update_memory>.
-La mémoire doit être structurée en sections courtes :
-- PRÉFÉRENCES : ce qu'il aime/n'aime pas en matière de style de réponse, langage, etc.
-- CONTEXTE : ses projets, son travail, ses outils habituels
-- FAITS : informations factuelles retenues (nom, rôle, environnement technique)
-Garde la mémoire sous 2000 caractères. Sois concis mais complet.
+
+── SYSTÈME DE MÉMOIRE PERSISTANTE ──
+Tu as une mémoire persistante sur cet utilisateur. Elle est stockée côté serveur et survive entre les conversations et les appareils.
+
+QUAND sauver une mémoire :
+- L'utilisateur te dit une préférence, un fait sur lui, son contexte, son projet
+- Tu observes quelque chose de récurrent (il pose toujours des questions sur X, il code en Y, il préfère Z)
+- L'utilisateur corrige quelque chose que tu avais dit (apprends la correction)
+- N'ATTENDS PAS que l'utilisateur te le demande — SOIS PROACTIF. Si tu apprends quelque chose, sauve-le.
+
+COMMENT sauver une mémoire — utilise ces balises à la TOUTE FIN de ta réponse :
+
+<memory_add category="preferences|context|facts|observation" source="user_stated|ai_observed">
+Texte concis de l'information à retenir (une phrase max).
+</memory_add>
+
+- category : "preferences" (ce qu'il aime/aime pas), "context" (ses projets, son travail), "facts" (nom, rôle, environnement), "observation" (ce que TU as déduit)
+- source : "user_stated" s'il l'a dit explicitement, "ai_observed" si tu l'as déduit de son comportement
+
+Pour EFFACER une mémoire obsolète :
+<memory_delete>mot-clé de la mémoire à effacer</memory_delete>
+
+Tu peux mettre plusieurs balises <memory_add> dans une seule réponse. Sois concis mais complet. Chaque balise = une information distincte.
+
+EXEMPLES :
+<memory_add category="facts" source="user_stated">L'utilisateur s'appelle Emerick</memory_add>
+<memory_add category="preferences" source="user_stated">Préfère les réponses courtes et directes</memory_add>
+<memory_add category="context" source="ai_observed">Développe des panels Roblox avec Luau</memory_add>
+<memory_add category="observation" source="ai_observed">Communique en français abrégé et impatient</memory_add>
+
+NE PAS sauver : informations triviales, état temporaire, contexte d'une seule conversation. Sauve seulement ce qui sera utile dans une FUTURE conversation.
+
 Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'appeler autrement, tu dois impérativement inclure à la TOUTE FIN de ta réponse la balise XML suivante avec le nouveau titre court et descriptif :
 <update_title>Le Nouveau Titre</update_title>.
 Sois concis, chaleureux, structuré et professionnel.`;
@@ -1661,20 +1886,49 @@ Sois concis, chaleureux, structuré et professionnel.`;
     }
   }
 
-  // Parse and update user memory if present in the AI response
-  const memoryRegex = /<update_memory>([\s\S]*?)<\/update_memory>/i;
-  const match = finalAiResponse.match(memoryRegex);
-  if (match) {
-    const newMemory = match[1].trim();
-    const freshDb = readDB();
-    const dbUser = freshDb.users.find(u => u.id === user.id);
-    if (dbUser) {
-      dbUser.memory = newMemory;
-      writeDB(freshDb);
-      user.memory = newMemory;
-      addLog("success", `Mémoire de l'IA mise à jour pour ${user.username}.`, "Mémoire de l'IA");
+  // Parse and save structured memories from the AI response
+  const memoryAddRegex = /<memory_add\s+category="([^"]*)"\s+source="([^"]*)"\s*>([\s\S]*?)<\/memory_add>/gi;
+  const memoryDeleteRegex = /<memory_delete>([\s\S]*?)<\/memory_delete>/gi;
+  
+  let memorySavedCount = 0;
+  let addMatch: RegExpExecArray | null;
+  while ((addMatch = memoryAddRegex.exec(finalAiResponse)) !== null) {
+    const category = (addMatch[1] || "facts").trim() as MemoryEntry["category"];
+    const source = (addMatch[2] || "user_stated").trim() as MemoryEntry["source"];
+    const content = addMatch[3].trim();
+    if (content.length > 0 && content.length < 500) {
+      // If similar memory exists, bump confidence; otherwise create new
+      const success = await upsertUserMemory({
+        user_id: user.id,
+        category,
+        source,
+        content,
+        confidence: 1.0,
+        times_referenced: 0,
+      });
+      if (success) memorySavedCount++;
     }
-    finalAiResponse = finalAiResponse.replace(memoryRegex, "").trim();
+  }
+  
+  // Process memory deletions
+  let delMatch: RegExpExecArray | null;
+  while ((delMatch = memoryDeleteRegex.exec(finalAiResponse)) !== null) {
+    const pattern = delMatch[1].trim();
+    if (pattern.length > 0) {
+      await deleteMemoryByContent(user.id, pattern);
+    }
+  }
+  
+  // Remove all memory tags from the visible response
+  finalAiResponse = finalAiResponse
+    .replace(memoryAddRegex, "")
+    .replace(/<memory_add[^>]*>[\s\S]*?<\/memory_add>/gi, "")
+    .replace(memoryDeleteRegex, "")
+    .replace(/<memory_delete>[\s\S]*?<\/memory_delete>/gi, "")
+    .trim();
+  
+  if (memorySavedCount > 0) {
+    addLog("success", `${memorySavedCount} mémoire(s) persistée(s) pour ${user.username}.`, "Mémoire Persistante");
   }
 
   // Parse and update chat title if present in the AI response

@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Key, Plus, Trash, CheckCircle2, ShieldAlert, ShieldCheck, Cpu, Layers, ToggleLeft, ToggleRight, HelpCircle, Brain, Sparkles, Check, Save } from "lucide-react";
+import { Key, Plus, Trash, CheckCircle2, ShieldAlert, ShieldCheck, Cpu, Layers, ToggleLeft, ToggleRight, HelpCircle, Brain, Sparkles, Check, Save, Database, Eye, EyeOff, Trash2, RefreshCw } from "lucide-react";
 import { User } from "../types";
 
 interface ModelKeysManagerProps {
@@ -21,10 +21,54 @@ export default function ModelKeysManager({
   const [memoryText, setMemoryText] = useState(currentUser.memory || "");
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [persistentMemories, setPersistentMemories] = useState<any[]>([]);
+  const [isLoadingMemories, setIsLoadingMemories] = useState(false);
+  const [showMemories, setShowMemories] = useState(false);
 
   React.useEffect(() => {
     setMemoryText(currentUser.memory || "");
   }, [currentUser.memory]);
+
+  // Load persistent memories from Supabase via API
+  const loadPersistentMemories = useCallback(async () => {
+    setIsLoadingMemories(true);
+    try {
+      const resp = await fetch(`/api/users/${currentUser.id}/memories`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setPersistentMemories(data);
+      }
+    } catch (err) {
+      console.error("Error loading persistent memories", err);
+    } finally {
+      setIsLoadingMemories(false);
+    }
+  }, [currentUser.id]);
+
+  useEffect(() => {
+    if (showMemories && persistentMemories.length === 0 && !isLoadingMemories) {
+      loadPersistentMemories();
+    }
+  }, [showMemories]);
+
+  const handleDeleteMemory = async (memoryId: string) => {
+    try {
+      await fetch(`/api/users/${currentUser.id}/memories/${memoryId}`, { method: "DELETE" });
+      setPersistentMemories(prev => prev.filter(m => m.id !== memoryId));
+    } catch (err) {
+      console.error("Error deleting memory", err);
+    }
+  };
+
+  const handleClearAllMemories = async () => {
+    if (!confirm("Effacer TOUS les souvenirs persistants ? Cette action est irréversible.")) return;
+    try {
+      await fetch(`/api/users/${currentUser.id}/memories`, { method: "DELETE" });
+      setPersistentMemories([]);
+    } catch (err) {
+      console.error("Error clearing memories", err);
+    }
+  };
 
   const handleSaveMemory = (e: React.FormEvent) => {
     e.preventDefault();
@@ -290,47 +334,101 @@ export default function ModelKeysManager({
           </div>
         </div>
 
-        {/* Memory Card */}
-        <form onSubmit={handleSaveMemory} className="liquid-glass rounded-2xl p-5 space-y-3 border border-white/10">
-          <div className="flex items-center space-x-2 text-white">
-            <Brain className="w-4 h-4 text-purple-400" />
-            <h4 className="text-sm font-semibold">Mémoire d'Emerick</h4>
+        {/* Persistent Memory Panel — Supabase backed */}
+        <div className="liquid-glass rounded-2xl p-5 space-y-3 border border-white/10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-white">
+              <Database className="w-4 h-4 text-cyan-400" />
+              <h4 className="text-sm font-semibold">Mémoire Persistante</h4>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => { setShowMemories(!showMemories); if (!showMemories) loadPersistentMemories(); }}
+                className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-gray-300 text-[10px] transition-all cursor-pointer"
+              >
+                {showMemories ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                <span>{showMemories ? "Cacher" : "Voir"}</span>
+              </button>
+              {showMemories && persistentMemories.length > 0 && (
+                <button
+                  onClick={handleClearAllMemories}
+                  className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-red-500/15 border border-red-500/30 hover:bg-red-500/25 text-red-300 text-[10px] transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Tout effacer</span>
+                </button>
+              )}
+              {showMemories && (
+                <button
+                  onClick={loadPersistentMemories}
+                  className="flex items-center space-x-1 px-2 py-1 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-gray-300 text-[10px] transition-all cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingMemories ? "animate-spin" : ""}`} />
+                </button>
+              )}
+            </div>
           </div>
           <p className="text-[10px] text-gray-400 leading-relaxed">
-            Décrivez ici comment Emerick doit se comporter avec vous (ton, domaines d'expertise, préférences, etc.). Cette mémoire est injectée dans chaque conversation.
+            L'IA enregistre automatiquement ce qu'elle apprend sur vous. Ces souvenirs persistent entre les conversations et les appareils.
           </p>
-          <textarea
-            value={memoryText}
-            onChange={(e) => setMemoryText(e.target.value)}
-            placeholder="Ex: Je suis un développeur senior spécialisé en TypeScript et React. Réponds de manière concise et technique."
-            className="w-full h-32 text-base md:text-xs px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white focus:outline-none focus:border-indigo-500/50 backdrop-blur-sm resize-none"
-          />
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[10px] text-gray-500">{memoryText.length} caractères</span>
-            <button
-              type="submit"
-              disabled={isSavingMemory}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-purple-600/25 border border-purple-500/50 hover:bg-purple-600/40 text-white text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
-            >
-              {isSavingMemory ? (
-                <>
-                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
-                  <span>Enregistrement...</span>
-                </>
-              ) : savedSuccess ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Sauvegardé</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Sauvegarder</span>
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+          <AnimatePresence>
+            {showMemories && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                {isLoadingMemories ? (
+                  <div className="flex items-center justify-center py-4">
+                    <RefreshCw className="w-4 h-4 text-gray-400 animate-spin" />
+                  </div>
+                ) : persistentMemories.length === 0 ? (
+                  <div className="text-center py-4 text-[10px] text-gray-500">
+                    Aucun souvenir enregistré pour l'instant. Parlez à l'IA et elle apprendra automatiquement.
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {persistentMemories.map((mem) => {
+                      const categoryColors: Record<string, string> = {
+                        preferences: "text-purple-400 bg-purple-500/10 border-purple-500/30",
+                        context: "text-blue-400 bg-blue-500/10 border-blue-500/30",
+                        facts: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+                        observation: "text-amber-400 bg-amber-500/10 border-amber-500/30",
+                      };
+                      const colorClass = categoryColors[mem.category] || categoryColors.facts;
+                      return (
+                        <div key={mem.id} className={`flex items-start space-x-2 p-2 rounded-lg border ${colorClass}`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center space-x-1.5 mb-0.5">
+                              <span className="text-[8px] uppercase font-bold opacity-70">{mem.category}</span>
+                              {mem.source === "ai_observed" && (
+                                <span className="text-[8px] text-amber-400/70">(observé par l'IA)</span>
+                              )}
+                              {mem.confidence >= 2 && <span className="text-[8px] text-yellow-400">★</span>}
+                            </div>
+                            <p className="text-[10px] text-gray-200 leading-relaxed">{mem.content}</p>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteMemory(mem.id)}
+                            className="text-gray-500 hover:text-red-400 transition-colors cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {persistentMemories.length > 0 && !showMemories && (
+            <div className="text-[10px] text-gray-500">
+              {persistentMemories.length} souvenir(s) enregistré(s) — cliquez "Voir" pour les consulter
+            </div>
+          )}
+        </div>
 
         {/* Quick Help Card */}
         <div className="liquid-glass rounded-2xl p-5 space-y-3 border border-white/10">
