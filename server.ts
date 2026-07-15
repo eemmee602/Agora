@@ -574,14 +574,16 @@ function writeDB(data: DB) {
   supabaseWriteDB(data).catch(err => console.error("[Supabase] async writeDB error:", err));
 }
 
-// On cold start: try to restore DB from Supabase before serving requests
+// On cold start: try to restore DB from Supabase — 3s timeout, non-blocking
 if (SUPABASE_URL && SUPABASE_KEY) {
   (async () => {
     try {
-      const restored = await supabaseReadDB();
+      const restored = await Promise.race([
+        supabaseReadDB(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
       if (restored && restored.chats) {
         _db = restored;
-        // Also write to local /tmp for fast subsequent reads
         try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
         console.log(`[Supabase] DB restored: ${restored.chats?.length || 0} chats, ${restored.users?.length || 0} users`);
       }
