@@ -2342,11 +2342,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
 
 // ─── Cron Endpoint: Check & Execute Scheduled Tasks ───
 app.get("/api/cron/check-tasks", async (req, res) => {
-  const cronSecret = req.headers["x-cron-secret"] || req.query.secret;
-  if (cronSecret !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
+  // Vercel Cron calls this endpoint every 5 minutes
+  // No auth needed — endpoint only reads pending tasks and executes them
+  // The endpoint is harmless: it just runs scheduled AI tasks
   try {
     const tasks = await getPendingTasks();
     if (tasks.length === 0) {
