@@ -1316,8 +1316,16 @@ app.post("/api/agents/:id/skill", (req, res) => {
 });
 
 // Chats: List for user
-app.get("/api/chats", (req, res) => {
+app.get("/api/chats", async (req, res) => {
   const userId = req.query.userId as string;
+  // Sync from Supabase first (Vercel multi-instance)
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    const restored = await supabaseReadDB();
+    if (restored && restored.chats) {
+      _db = restored;
+      try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
+    }
+  }
   const db = readDB();
   const userChats = db.chats.filter(c => c.userId === userId || c.userId === "admin-emerick");
   res.json(userChats);
@@ -1493,6 +1501,17 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const startTime = Date.now();
   const chatId = req.params.id;
   const { senderId, senderName, content, attachments } = req.body;
+  
+  // On Vercel, each request may hit a different instance.
+  // Force-sync from Supabase to get the latest DB state.
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    const restored = await supabaseReadDB();
+    if (restored && restored.chats) {
+      _db = restored;
+      try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
+    }
+  }
+  
   const db = readDB();
 
   const chatIndex = db.chats.findIndex(c => c.id === chatId);
