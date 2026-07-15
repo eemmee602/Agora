@@ -1503,12 +1503,12 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const { senderId, senderName, content, attachments } = req.body;
   
   // On Vercel, each request may hit a different instance.
-  // Force-sync from Supabase to get the latest DB state — with 3s timeout to avoid 504.
-  if (SUPABASE_URL && SUPABASE_KEY) {
+  // Force-sync from Supabase to get the latest DB state — non-blocking with 2s cap.
+  if (SUPABASE_URL && SUPABASE_KEY && !_db) {
     try {
       const restored = await Promise.race([
         supabaseReadDB(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
       ]);
       if (restored && restored.chats) {
         _db = restored;
@@ -1896,6 +1896,8 @@ Sois concis, chaleureux, structuré et professionnel.`;
   };
   
   try {
+    let totalApiCalls = 0;
+    const MAX_API_CALLS = 5; // Don't try more than 5 API calls total (prevents Vercel 504)
     for (const candidateKey of orderedKeys) {
       activeUserKey = candidateKey;
       // Skip providers that recently failed (cooldown)
@@ -1925,6 +1927,13 @@ Sois concis, chaleureux, structuré et professionnel.`;
       }
       actualModelUsed = modelUsed;
       addLog("info", `Clé ${candidateKey.name} → modèle ${modelUsed}`, "API");
+      
+      // Global call limit — prevents Vercel 504 timeout
+      if (totalApiCalls >= MAX_API_CALLS) {
+        addLog("warning", `Limite de ${MAX_API_CALLS} tentatives API atteinte. Arrêt des tentatives.`, "Passerelle API");
+        break;
+      }
+      totalApiCalls++;
       
       try {
         // Provider API endpoints (OpenAI-compatible)
@@ -1999,9 +2008,9 @@ Sois concis, chaleureux, structuré et professionnel.`;
                   requestBody.tool_choice = "auto";
                 }
 
-                // Timeout per API call — 12s max (Vercel serverless has ~60s total)
+                // Timeout per API call — 8s max (Vercel serverless has ~60s total, need to try multiple keys)
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 12000);
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
 
                 const response = await fetch(apiUrl, {
                   method: "POST",
@@ -2098,7 +2107,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
                       method: "POST",
                       headers,
                       body: JSON.stringify({ model: tryModel, messages: sanitizeMessages(toolMessages), stream: false }),
-                      signal: AbortSignal.timeout(12000),
+                      signal: AbortSignal.timeout(8000),
                     });
                     if (plainResponse.ok) {
                       const plainData = await plainResponse.json();
