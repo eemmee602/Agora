@@ -1546,6 +1546,23 @@ Sois concis, chaleureux, structuré et professionnel.`;
     ? chat.messages.slice(-MAX_HISTORY_MESSAGES)
     : chat.messages;
 
+  // Extract the LAST user message to emphasize it as "the current question"
+  const lastUserMsg = [...recentMessages].reverse().find(m => m.senderRole === "user");
+  if (lastUserMsg) {
+    systemPrompt += `\n\n── QUESTION ACTUELLE DE L'UTILISATEUR ──\nL'utilisateur vient de dire: "${lastUserMsg.content.substring(0, 500)}"\nRéponds À CETTE question. Ne dérive pas vers d'autres sujets.\nSi la question fait référence à un échange précédent, utilise le contexte de l'historique.\nSinon, traite-la comme une question indépendante.`;
+  }
+
+  // Build a compact context summary of older messages (before the recent window)
+  // to give the AI awareness of past topics without sending full history
+  if (chat.messages.length > MAX_HISTORY_MESSAGES) {
+    const olderMessages = chat.messages.slice(0, -MAX_HISTORY_MESSAGES);
+    const olderUserMsgs = olderMessages.filter(m => m.senderRole === "user");
+    if (olderUserMsgs.length > 0) {
+      const topicSummary = olderUserMsgs.slice(-5).map(m => `• ${m.content.substring(0, 100)}`).join("\n");
+      systemPrompt += `\n\n── SUJETS PRÉCÉDENTS (pour référence, ne pas y revenir) ──\nVoici les derniers sujets abordés plus tôt dans cette conversation:\n${topicSummary}\nNe confonds PAS ces sujets avec la question actuelle. N'y reviens pas sauf si l'utilisateur fait explicitement référence à eux.`;
+    }
+  }
+
   // Format history for models, including image attachments for multi-modal processing
   const formattedGoogleContents = recentMessages.filter(m => m.senderRole !== "system").map(msg => {
     const parts: any[] = [{ text: msg.content }];
@@ -1683,7 +1700,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
                 };
 
                 // Add tools if the provider supports function calling
-                const supportsTools = ["openrouter", "openai", "groq", "together", "mistral", "deepseek"].includes(candidateKey.provider);
+                const supportsTools = ["openrouter", "openai", "groq", "together", "mistral", "deepseek", "cohere", "perplexity"].includes(candidateKey.provider);
                 if (supportsTools && iteration < MAX_TOOL_ITERATIONS) {
                   requestBody.tools = TOOL_DEFINITIONS;
                   requestBody.tool_choice = "auto";
