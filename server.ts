@@ -801,6 +801,55 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         required: ["prompt", "execute_at"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_webhook",
+      description: "Envoie un message à un webhook Discord/Slack. Simple et direct. L'URL du webhook et le contenu du message suffisent.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL du webhook Discord (https://discord.com/api/webhooks/...) ou Slack" },
+          content: { type: "string", description: "Le message à envoyer" },
+          embed_title: { type: "string", description: "Optionnel: titre d'un embed Discord (pour un message plus joli)" },
+          embed_color: { type: "number", description: "Optionnel: couleur de l'embed en décimal (ex: 5814783 pour bleu, 16711680 pour rouge, 65280 pour vert)" }
+        },
+        required: ["url", "content"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "supabase_query",
+      description: "Interroge la base de données Supabase de l'utilisateur. Lecture seule (SELECT). Peut lire les tables utilisateur, les mémoires, les tâches programmées, etc. Aucun token requis — le serveur gère l'auth automatiquement.",
+      parameters: {
+        type: "object",
+        properties: {
+          table: { type: "string", description: "Nom de la table (ex: agora_user_memories, agora_scheduled_tasks, agora_data)" },
+          filter: { type: "string", description: "Filtre optionnel au format PostgREST (ex: 'user_id=eq.admin-emerick', 'status=eq.pending')" },
+          limit: { type: "number", description: "Nombre max de résultats (défaut: 50, max: 200)" },
+          select: { type: "string", description: "Colonnes à sélectionner (défaut: * pour toutes)" }
+        },
+        required: ["table"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "discord_message",
+      description: "Envoie un message dans un salon Discord via le bot. Aucun token requis — le serveur gère l'auth.",
+      parameters: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "ID du salon Discord" },
+          content: { type: "string", description: "Le message à envoyer" }
+        },
+        required: ["channel_id", "content"]
+      }
+    }
   }
 ];
 
@@ -995,6 +1044,106 @@ async function executeTool(name: string, args: any): Promise<{ success: boolean;
           }
         }
         return { success: false, result: "Base de données non configurée" };
+      }
+
+      case "send_webhook": {
+        const { url: webhookUrl, content: msgContent, embed_title, embed_color } = args;
+        if (!webhookUrl || typeof webhookUrl !== "string") return { success: false, result: "URL du webhook manquante" };
+        if (!msgContent) return { success: false, result: "Contenu du message manquant" };
+        if (isBlockedUrl(webhookUrl)) return { success: false, result: "URL bloquée (protection)" };
+        
+        // Discord webhook format: simple content OR embed
+        const payload: any = {};
+        if (embed_title) {
+          payload.embeds = [{
+            title: embed_title,
+            description: msgContent,
+            color: embed_color || 5814783
+          }];
+        } else {
+          payload.content = msgContent;
+        }
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const resp = await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          const respText = await resp.text().catch(() => "");
+          if (resp.ok) {
+            return { success: true, result: `✅ Message envoyé au webhook (status ${resp.status}).` };
+          }
+          return { success: false, result: `Erreur webhook: status ${resp.status}. ${respText.substring(0, 500)}` };
+        } catch (err: any) {
+          return { success: false, result: `Erreur envoi webhook: ${err.message}` };
+        }
+      }
+
+      case "supabase_query": {
+        const { table: tableName, filter, limit: queryLimit, select: selectCols } = args;
+        if (!tableName || typeof tableName !== "string") return { success: false, result: "Table manquante" };
+        // Whitelist of readable tables
+        const allowedTables = ["agora_user_memories", "agora_scheduled_tasks", "agora_data", "agora_model_cache"];
+        if (!allowedTables.includes(tableName)) {
+          return { success: false, result: `Table "${tableName}" non autorisée. Tables disponibles: ${allowedTables.join(", ")}` };
+        }
+        if (!SUPABASE_URL || !SUPABASE_KEY) return { success: false, result: "Base de données non configurée" };
+        
+        const maxLimit = Math.min(queryLimit || 50, 200);
+        let queryUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${encodeURIComponent(selectCols || "*")}&limit=${maxLimit}`;
+        if (filter) {
+          queryUrl += `&${filter}`;
+        }
+        
+        try {
+          const resp = await fetch(queryUrl, {
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const truncated = JSON.stringify(data, null, 2);
+            return { success: true, result: truncated.length > 5000 ? truncated.substring(0, 5000) + "\n... (tronqué)" : truncated };
+          }
+          return { success: false, result: `Erreur Supabase: ${resp.status}` };
+        } catch (err: any) {
+          return { success: false, result: `Erreur: ${err.message}` };
+        }
+      }
+
+      case "discord_message": {
+        const { channel_id: channelId, content: discContent } = args;
+        if (!channelId || !discContent) return { success: false, result: "channel_id et content requis" };
+        
+        // Use DISCORD_BOT_TOKEN from env
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+        if (!botToken) return { success: false, result: "Token Discord non configuré sur le serveur" };
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const resp = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bot ${botToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ content: discContent.substring(0, 2000) }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (resp.ok) {
+            return { success: true, result: `✅ Message envoyé dans le salon ${channelId}.` };
+          }
+          const errText = await resp.text().catch(() => "");
+          return { success: false, result: `Erreur Discord: ${resp.status}. ${errText.substring(0, 500)}` };
+        } catch (err: any) {
+          return { success: false, result: `Erreur: ${err.message}` };
+        }
       }
 
       default:
@@ -1672,36 +1821,39 @@ PRINCIPES DE COMMUNICATION :
   }
 
   // Update system prompt to inform the AI about available tools
-  systemPrompt += `\n\n[OUTILS DISPONIBLES] : Tu as accès à 4 outils que tu peux utiliser pour répondre aux questions de l'utilisateur. UTILISE-LES ACTIVEMENT quand la situation le demande :
+  systemPrompt += `\n\n[OUTILS DISPONIBLES] : Tu as accès à 8 outils. UTILISE-LES ACTIVEMENT :
 
-1. **http_request** : Envoie une requête HTTP vers N'IMPORTE QUELLE URL externe.
-   - POST vers un webhook Discord/Slack : method="POST", url="https://discord.com/api/webhooks/...", body='{"content":"coucou"}'
-   - GET pour récupérer des données d'une API : method="GET", url="https://api.exemple.com/data"
-   - PUT/PATCH pour modifier des ressources distantes
-   - Tu PEUX envoyer des messages à des webhooks, interroger des APIs REST, télécharger des pages web.
-   - N'invente JAMAIS une réponse quand tu peux faire une requête réelle.
+1. **send_webhook** : Envoie un message à un webhook Discord/Slack (SIMPLE).
+   - url=URL du webhook, content=le message, embed_title=titre optionnel, embed_color=couleur optionnelle
+   - UTILISE CELUI-CI en priorité pour envoyer un message à un webhook Discord.
 
-2. **github_request** : Interroge l'API GitHub (token inclus automatiquement).
-   - Créer/lire/modifier des issues, PRs, repos, fichiers
-   - Ex: endpoint="/repos/owner/repo/issues", method="GET"
-   - Ex: endpoint="/repos/owner/repo/issues", method="POST", body='{"title":"Bug","body":"Description"}'
+2. **http_request** : Requête HTTP brute vers N'IMPORTE QUELLE URL externe.
+   - method="POST", url="https://...", body='{"content":"coucou"}'
+   - Pour les cas où send_webhook ne suffit pas (API custom, GET complexe, etc.)
 
-3. **web_search** : Recherche sur le web via DuckDuckGo. Retourne titres + liens.
-   - Utilise-le quand tu ne connais pas la réponse et veux chercher.
+3. **github_request** : Interroge l'API GitHub (token inclus automatiquement).
+   - endpoint="/repos/owner/repo/issues", method="GET" ou "POST"
 
-4. **execute_code** : Exécute du code JavaScript en sandbox (5s max, pas de réseau/fs).
-   - Calculs complexes, manipulation de données, parsing JSON, etc.
+4. **web_search** : Recherche sur le web via DuckDuckGo.
 
-5. **schedule_task** : Programme une tâche à exécuter automatiquement à une heure future.
-   - L'utilisateur peut dire "à 15h rappelle-moi de manger", "dans 2h cherche les news", "à 3h du matin fais un résumé du jour".
-   - Paramètres: prompt (la tâche à exécuter), execute_at (format: "dans 2h", "à 15h", "dans 30min", ou ISO 8601).
-   - La tâche s'exécute AUTOMATIQUEMENT à l'heure prévue — l'utilisateur n'a pas besoin d'être connecté.
-   - Le résultat est sauvegardé et visible dans la section "Tâches programmées" de l'interface.
-   - UTILISE CET OUTIL quand l'utilisateur dit "à X heure", "dans X heures/min", "programme", "rappelle-moi à", "fais ça plus tard".
+5. **execute_code** : Exécute du code JavaScript en sandbox (5s max).
 
-RÈGLE CRITIQUE : Quand l'utilisateur te demande d'envoyer quelque chose quelque part (webhook, API, serveur), UTILISE http_request. Ne dis JAMAIS "je ne peux pas" si tu as l'outil http_request disponible. Dis "je ne peux pas" UNIQUEMENT si c'est techniquement impossible (URL interne/bloquée).
+6. **schedule_task** : Programme une tâche à exécuter plus tard.
+   - prompt=la tâche, execute_at="dans 2h" ou "à 15h" ou ISO 8601
+   - S'exécute AUTOMATIQUEMENT — l'utilisateur n'a pas besoin d'être connecté.
 
-Après avoir reçu le résultat d'un outil, utilise ces informations pour formuler ta réponse finale à l'utilisateur. Tu peux appeler plusieurs outils de suite.`;
+7. **supabase_query** : Interroge la base de données Supabase (LECTURE SEULE).
+   - Tables: agora_user_memories, agora_scheduled_tasks, agora_data, agora_model_cache
+   - Aucun token requis. Ex: table="agora_user_memories", filter="user_id=eq.admin-emerick"
+
+8. **discord_message** : Envoie un message dans un salon Discord via le bot.
+   - channel_id=ID du salon, content=le message
+   - Aucun token requis.
+
+RÈGLES CRITIQUES :
+- Quand l'utilisateur te demande d'envoyer un message (webhook, Discord, API), UTILISE send_webhook ou discord_message. Ne dis JAMAIS "je ne peux pas".
+- N'invente JAMAIS une réponse quand tu peux faire une requête réelle.
+- Tu peux appeler plusieurs outils de suite dans la même réponse.`;
 
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
 
