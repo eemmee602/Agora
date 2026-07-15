@@ -375,10 +375,10 @@ const defaultDB: DB = {
       apiKeys: [
         {
           id: "key-default",
-          name: "Agora Core Key",
-          provider: "openrouter",
-          key: process.env.OPENROUTER_API_KEY || "",
-          model: "google/gemini-2.5-flash",
+          name: "Mistral (server)",
+          provider: "mistral",
+          key: process.env.MISTRAL_API_KEY || "",
+          model: "mistral-small-latest",
           active: true
         }
       ],
