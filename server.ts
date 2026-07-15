@@ -1330,7 +1330,9 @@ app.get("/api/chats", async (req, res) => {
     }
   }
   const db = readDB();
-  const userChats = db.chats.filter(c => c.userId === userId || c.userId === "admin-emerick");
+  const userChats = userId === "admin-emerick"
+    ? db.chats
+    : db.chats.filter(c => c.userId === userId);
   res.json(userChats);
 });
 
@@ -1507,7 +1509,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   
   // On Vercel, each request may hit a different instance.
   // Force-sync from Supabase to get the latest DB state — non-blocking with 2s cap.
-  if (SUPABASE_URL && SUPABASE_KEY && !_db) {
+  // Always sync from Supabase (Vercel multi-instance: each request may hit a different instance)
+  if (SUPABASE_URL && SUPABASE_KEY) {
     try {
       const restored = await Promise.race([
         supabaseReadDB(),
