@@ -50,13 +50,19 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
     setAuthError("");
     setIsSubmitting(true);
     try {
-      // Simulate OAuth login with the sponsor email specified in the prompt
+      // Use the username field as email if it looks like an email, otherwise prompt
+      const ssoEmail = username.trim().includes("@") ? username.trim() : "";
+      if (!ssoEmail) {
+        setAuthError("Entrez votre email Google dans le champ identifiant ci-dessus, puis cliquez SSO.");
+        setIsSubmitting(false);
+        return;
+      }
       const response = await fetch("/api/auth/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: "egirouxlafontaine@gmail.com",
-          name: "Egiroux Lafontaine"
+          email: ssoEmail,
+          name: ssoEmail.split("@")[0]
         })
       });
       const data = await response.json();
@@ -111,7 +117,7 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
               <User className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
               <input
                 type="text"
-                placeholder={isRegister ? "Votre identifiant" : "Emerick ou votre email"}
+                placeholder={isRegister ? "Votre identifiant" : "Votre identifiant ou email"}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full text-base md:text-xs pl-9 pr-4 py-2.5 rounded-xl liquid-glass-input text-white focus:outline-none placeholder-gray-500"
@@ -142,7 +148,7 @@ export default function AuthScreen({ onLoginSuccess, isLoading }: AuthScreenProp
               <Lock className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
               <input
                 type="password"
-                placeholder="Aaxxppm14 ou de votre choix"
+                placeholder="Votre mot de passe"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full text-base md:text-xs pl-9 pr-4 py-2.5 rounded-xl liquid-glass-input text-white focus:outline-none placeholder-gray-500"
