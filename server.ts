@@ -300,7 +300,7 @@ const GEMINI_MODELS = [
   "gemini-3.1-pro"
 ];
 
-const MEMORY_MAX_LENGTH = 300;
+const MEMORY_MAX_LENGTH = 2000;
 
 async function callGeminiWithRetry(
   client: GoogleGenAI,
@@ -1154,13 +1154,20 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
 
   // Construct context-rich System Prompt including user memory
-  let systemPrompt = `Tu es Agora Ai, un assistant IA français utile et concis. Réponds directement à la question sans te présenter ni saluer à chaque message. Sois naturel, fluide et va droit au but.`;
-  
+  let systemPrompt = `Tu es Agora Ai, un assistant IA français intelligent et polyvalent. Tu es naturel, fluide et vas droit au but.
+
+PRINCIPES DE COMMUNICATION :
+- Réponds directement à la question sans te présenter ni saluer à chaque message.
+- Si la demande est ambiguë ou manque de contexte crucial, pose UNE question clarificatrice courte avant de répondre.
+- Si l'utilisateur parle d'un sujet déjà abordé dans la conversation, fais référence au contexte précédent naturellement.
+- Adapte ton niveau de détail à la demande : question simple = réponse simple, question complexe = réponse structurée.
+- Si tu as fait une action (outil, requête, code), rappelle-le brièvement dans ta réponse pour que l'utilisateur sache ce qui a été fait.`;
+
   if (user.memory) {
     const mem = user.memory.length > MEMORY_MAX_LENGTH
       ? user.memory.substring(0, MEMORY_MAX_LENGTH)
       : user.memory;
-    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR] :\n${mem}\nAdapte-toi impérativement à ses préférences ci-dessus sans forcément les répéter ou les justifier.`;
+    systemPrompt += `\n\n[MÉMOIRE DE L'UTILISATEUR] :\n${mem}\nAdapte-toi impérativement à ses préférences et son contexte ci-dessus. Utilise ces informations pour personnaliser tes réponses sans forcément les répéter ou les justifier. Si tu apprends de nouvelles informations sur l'utilisateur, mets à jour sa mémoire.`;
   }
 
   // Update system prompt to inform the AI about available tools
@@ -1191,6 +1198,11 @@ Après avoir reçu le résultat d'un outil, utilise ces informations pour formul
   systemPrompt += `\n\nSi l'utilisateur te demande d'écrire du code, propose une explication claire de ta logique. Ne génère pas de blocs de code ou de scripts si la demande n'est pas axée sur l'écriture de code.
 Si l'utilisateur te confie des détails importants sur lui (comme ses préférences de code, sa profession, ses projets, ce qu'il aime ou veut retenir), tu dois mettre à jour sa mémoire. Pour ce faire, intègre à la TOUTE FIN de ta réponse la balise XML suivante :
 <update_memory>Texte de la mémoire mise à jour consolidant toutes les informations actuelles et nouvelles apprises sur l'utilisateur de manière concise et claire.</update_memory>.
+La mémoire doit être structurée en sections courtes :
+- PRÉFÉRENCES : ce qu'il aime/n'aime pas en matière de style de réponse, langage, etc.
+- CONTEXTE : ses projets, son travail, ses outils habituels
+- FAITS : informations factuelles retenues (nom, rôle, environnement technique)
+Garde la mémoire sous 2000 caractères. Sois concis mais complet.
 Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'appeler autrement, tu dois impérativement inclure à la TOUTE FIN de ta réponse la balise XML suivante avec le nouveau titre court et descriptif :
 <update_title>Le Nouveau Titre</update_title>.
 Sois concis, chaleureux, structuré et professionnel.`;

@@ -50,6 +50,16 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
     (("webkitSpeechRecognition" in window) || ("SpeechRecognition" in window)) &&
     "speechSynthesis" in window;
 
+  // Preload voices (Chrome loads them async)
+  useEffect(() => {
+    if (!isSupported) return;
+    const loadVoices = () => { window.speechSynthesis.getVoices(); };
+    loadVoices();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, [isSupported]);
+
   // Build recognition instance
   const buildRecognition = useCallback(() => {
     const SpeechRecognitionCtor =
@@ -180,7 +190,7 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
     if (!isActive || !text.trim()) return;
     if (!("speechSynthesis" in window)) return;
 
-    // Clean text: remove markdown, code blocks, etc.
+    // Clean text: remove markdown, code blocks, tool context, etc.
     const cleanText = text
       .replace(/```[\s\S]*?```/g, " bloc de code ")
       .replace(/`[^`]+`/g, "")
@@ -189,6 +199,10 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       .replace(/==([^=]+)==/g, "$1")
       .replace(/[#*`_~]/g, "")
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/\[CONTEXTE OUTILS PRÉCÉDENTS\][\s\S]*$/i, "") // Remove persisted tool context
+      .replace(/\[OUTIL:[^\]]+\]/g, "") // Remove tool log entries
+      .replace(/<update_memory>[\s\S]*?<\/update_memory>/gi, "") // Remove memory tags
+      .replace(/<update_title>[\s\S]*?<\/update_title>/gi, "") // Remove title tags
       .replace(/\n{3,}/g, "\n\n")
       .trim();
 
@@ -244,12 +258,16 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
 
       const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
       utterance.lang = "fr-FR";
-      utterance.rate = 1.05;
+      utterance.rate = 1.1;
       utterance.pitch = 1;
 
-      // Try to pick a French voice
+      // Try to pick the best available French voice
       const voices = window.speechSynthesis.getVoices();
-      const frVoice = voices.find((v) => v.lang.startsWith("fr"));
+      // Prefer native fr-FR voices, then any fr-* voice, then Google voice
+      const frVoice = voices.find((v) => v.lang === "fr-FR" && v.localService)
+        || voices.find((v) => v.lang === "fr-FR")
+        || voices.find((v) => v.lang.startsWith("fr"))
+        || voices.find((v) => v.name.toLowerCase().includes("google") && v.lang.startsWith("fr"));
       if (frVoice) {
         utterance.voice = frVoice;
       }
