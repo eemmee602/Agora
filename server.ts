@@ -1527,7 +1527,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
 
   const chatIndex = db.chats.findIndex(c => c.id === chatId);
   if (chatIndex === -1) {
-    return res.status(404).json({ error: "Chat non trouvé" });
+    addLog("error", "Error: 502 — Chat non trouvé lors de l'envoi de message", "Agora Core");
+    return res.status(404).json({ errorCode: 502 });
   }
 
   const chat = db.chats[chatIndex];
@@ -1535,9 +1536,8 @@ app.post("/api/chats/:id/messages", async (req, res) => {
 
   // Check quota limit
   if (user.quotaUsed >= user.quotaLimit) {
-    return res.status(403).json({
-      error: "Quota d'utilisation dépassé. Veuillez contacter l'administrateur Emerick."
-    });
+    addLog("warning", `Error: 201 — Quota dépassé pour ${user.username} (${user.quotaUsed}/${user.quotaLimit})`, "Agora Core");
+    return res.status(403).json({ errorCode: 201 });
   }
 
   // 1. Log user request
@@ -1641,6 +1641,12 @@ app.post("/api/chats/:id/messages", async (req, res) => {
       "qwen/qwen-2.5-72b-instruct",
       "mistralai/mistral-7b-instruct",
       "deepseek/deepseek-chat",
+      // Free-tier models (unlimited, rate-limited but no quota cutoff)
+      "google/gemini-2.5-flash:free",
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "qwen/qwen-2.5-72b-instruct:free",
+      "deepseek/deepseek-r1:free",
+      "mistralai/mistral-7b-instruct:free",
     ] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
     { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
@@ -2306,30 +2312,17 @@ Sois concis, chaleureux, structuré et professionnel.`;
     }
   } catch (error: any) {
     console.error("Erreur API, fallback simulé:", error);
-    addLog("warning", "Toutes les clés API ont échoué. Réponse de secours.", "Système");
-    actualModelUsed = "Secours (hors ligne)";
-    
-    let keyInfo = "";
+    // Determine error code for frontend display (user sees "Error: 2XX", admin sees full detail in logs)
     const isQuotaExceeded = error?.message?.includes("Quota exceeded") || 
                             error?.message?.includes("429") || 
                             error?.message?.includes("RESOURCE_EXHAUSTED") ||
                             String(error).includes("429") ||
                             String(error).includes("Quota");
-
-    if (activeUserKey) {
-      keyInfo = `\n\n⚠️ **Erreur** : La clé API "${activeUserKey.name}" (${activeUserKey.provider}) a échoué (${customKeyError || "Quota dépassé"}). Une réponse de secours a été générée.\n\n💡 Ajoutez une clé API valide dans l'onglet **Clés** pour utiliser la vraie IA.`;
-    } else if (isQuotaExceeded) {
-      keyInfo = `\n\n⚠️ **Quota dépassé (429)** : La clé API système a atteint sa limite gratuite quotidienne.\n\n💡 Ajoutez votre propre clé API (Google, Groq, OpenRouter...) dans l'onglet **Clés** pour continuer sans limite.`;
-    } else {
-      keyInfo = `\n\n⚠️ **Aucune clé API active**. Vous utilisez le mode de secours. Configurez une clé API dans l'onglet **Clés** pour activer la vraie IA.`;
-    }
-
-    // Simple fallback — no more fake code/search distinction
-    if (hasPreviousAgentMessage) {
-      finalAiResponse = `Je n'ai pas pu traiter votre demande car aucune clé API n'a fonctionné. Ajoutez une clé API valide dans l'onglet **Clés**.${keyInfo}`;
-    } else {
-      finalAiResponse = `Je n'ai pas pu traiter votre demande. Vérifiez vos clés API dans les paramètres.${keyInfo}`;
-    }
+    const errorCode = isQuotaExceeded ? 201 : (activeUserKey ? 204 : 202);
+    addLog("error", `Error: ${errorCode} — ${activeUserKey ? `Clé ${activeUserKey.name} (${activeUserKey.provider})` : "Aucune clé active"} — ${customKeyError || error?.message || "Quota dépassé"}`, "Passerelle API");
+    actualModelUsed = `Error: ${errorCode}`;
+    
+    finalAiResponse = `Error: ${errorCode}\n\nJe n'ai pas pu traiter votre demande. Ajoutez une clé API valide dans l'onglet **Clés** pour activer la vraie IA.`;
 
     const words = finalAiResponse.split(/(\s+)/);
     for (const word of words) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Users, Shield, History, Key, Trash2, Edit3, Settings, AlertTriangle, Terminal, RefreshCw, Eye, MessageSquare, Clock } from "lucide-react";
 import { User, Chat, SystemLog, safeFormatTime, safeFormatDate } from "../types";
+import { ERROR_CODES } from "../errorCodes";
 
 interface AdminPanelProps {
   users: User[];
@@ -13,7 +14,7 @@ interface AdminPanelProps {
   isLoading: boolean;
 }
 
-type AdminSubTab = "members" | "chats" | "logs";
+type AdminSubTab = "members" | "chats" | "logs" | "errors";
 
 export default function AdminPanel({
   users,
@@ -90,6 +91,15 @@ export default function AdminPanel({
           >
             <Terminal className="w-3.5 h-3.5" />
             <span>Journaux & Sécurité</span>
+          </button>
+          <button
+            onClick={() => setActiveSubTab("errors")}
+            className={`px-4 py-2 rounded-lg text-xs font-medium tracking-wide transition-all cursor-pointer flex items-center space-x-2 ${
+              activeSubTab === "errors" ? "bg-red-600/35 border border-red-500/50 text-white shadow-md shadow-red-600/15 backdrop-blur-sm" : "text-gray-400 hover:text-white"
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>Codes Erreur</span>
           </button>
         </div>
       </div>
@@ -364,6 +374,44 @@ export default function AdminPanel({
                   <span>Réinitialiser les agents</span>
                 </button>
               </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* SUBTAB 4: ERROR CODES DIRECTORY (admin only) */}
+        {activeSubTab === "errors" && (
+          <motion.div
+            key="errors"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="liquid-glass rounded-2xl overflow-hidden border border-white/5"
+          >
+            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+              <h3 className="font-display font-medium text-white text-sm flex items-center space-x-2">
+                <AlertTriangle className="w-4 h-4 text-red-400" />
+                <span>Répertoire des Codes Erreur</span>
+              </h3>
+              <span className="text-xs text-gray-400">Réservé à l'administrateur — les utilisateurs voient uniquement le code</span>
+            </div>
+            <div className="p-4 space-y-2 max-h-[500px] overflow-y-auto">
+              {Object.entries(ERROR_CODES).map(([code, info]: [string, { label: string; description: string; severity: "warning" | "error" | "critical" }]) => {
+                const severityColor = info.severity === "critical" ? "text-red-400 bg-red-950/30 border-red-500/30"
+                  : info.severity === "error" ? "text-orange-400 bg-orange-950/20 border-orange-500/20"
+                  : "text-yellow-400 bg-yellow-950/20 border-yellow-500/20";
+                return (
+                  <div key={code} className={`p-3 rounded-xl border ${severityColor}`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center space-x-3">
+                        <span className="font-mono font-bold text-sm text-white">Error: {code}</span>
+                        <span className="text-[10px] font-mono uppercase tracking-wider opacity-70">{info.label}</span>
+                      </div>
+                      <span className="text-[9px] uppercase font-bold tracking-wider opacity-60">{info.severity}</span>
+                    </div>
+                    <p className="text-xs text-gray-300 leading-relaxed">{info.description}</p>
+                  </div>
+                );
+              })}
             </div>
           </motion.div>
         )}

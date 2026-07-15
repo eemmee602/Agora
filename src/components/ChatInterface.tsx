@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   MessageSquare, Plus, Trash2, Send, Cpu, Layers, Code, 
   ShieldCheck, Search, Copy, Check, ExternalLink, Globe, 
-  Terminal, Sparkles, ChevronDown, User, Bot, AlertCircle,
+  Terminal, Sparkles, ChevronDown, User, Bot, AlertCircle, AlertTriangle,
   X, Menu, Paperclip, Camera, Image as ImageIcon, RefreshCw,
   ArrowDown, Pencil, Download, Mic, MicOff, Volume2, Square
 } from "lucide-react";
@@ -546,20 +546,20 @@ export default function ChatInterface({
       {/* Main chat window */}
       <div className="md:col-span-8 lg:col-span-9 min-w-0 flex flex-col justify-between liquid-glass rounded-2xl overflow-hidden relative border border-white/5 h-full min-h-0">
         
-        {/* Model error notice */}
+        {/* Model error notice — shows code only, admin decodes in Admin panel */}
         {modelError && (
-          <div className="bg-pink-950/40 border-b border-pink-500/20 px-5 py-2.5 flex items-center justify-between text-pink-400 text-xs animate-in fade-in slide-in-from-top duration-200">
+          <div className="bg-red-950/50 border-b border-red-500/30 px-5 py-2.5 flex items-center justify-between text-red-400 text-xs animate-in fade-in slide-in-from-top duration-200">
             <div className="flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{modelError}</span>
+              <AlertTriangle className="w-4 h-4 shrink-0 fill-red-500/20" />
+              <span className="font-mono font-bold tracking-wider">{modelError}</span>
             </div>
             {onRetry && (
               <button
                 type="button"
                 onClick={onRetry}
-                className="shrink-0 px-2.5 py-1 rounded-lg bg-pink-500/20 border border-pink-500/45 text-[10px] font-bold uppercase tracking-wider text-white hover:bg-pink-500/35 transition-all flex items-center space-x-1 cursor-pointer shadow-sm"
+                className="shrink-0 px-2.5 py-1 rounded-lg bg-red-500/20 border border-red-500/45 text-[10px] font-bold uppercase tracking-wider text-white hover:bg-red-500/35 transition-all flex items-center space-x-1 cursor-pointer shadow-sm"
               >
-                <RefreshCw className="w-3 h-3 text-pink-300" />
+                <RefreshCw className="w-3 h-3 text-red-300" />
                 <span>Réessayer</span>
               </button>
             )}

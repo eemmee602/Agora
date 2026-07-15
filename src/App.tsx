@@ -12,6 +12,7 @@ import AgentTree from "./components/AgentTree";
 import ModelKeysManager from "./components/ModelKeysManager";
 import AdminPanel from "./components/AdminPanel";
 import DevOpsConsole from "./components/DevOpsConsole";
+import { getErrorDisplay } from "./errorCodes";
 
 type ActiveTab = "chat" | "tree" | "keys" | "tools" | "admin";
 
@@ -37,9 +38,9 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [serverLogs, setServerLogs] = useState<Array<{ type: string; message: string; source: string; timestamp: string }>>([]);
 
-  // Auto load user from session storage for convenience on reload
+  // Auto load user from local storage (survives app switch / page suspend on mobile)
   useEffect(() => {
-    const cachedUser = sessionStorage.getItem("agora_user");
+    const cachedUser = localStorage.getItem("agora_user");
     if (cachedUser) {
       try {
         const parsed = JSON.parse(cachedUser);
@@ -49,6 +50,25 @@ export default function App() {
       }
     }
   }, []);
+
+  // Auto-reconnect: when page becomes visible again (mobile app switch), refresh data
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && currentUser) {
+        // Page is back in focus — refresh data to sync any missed updates
+        fetchAgents();
+        if (currentUser.role === "admin") {
+          fetchAdminLogs();
+          fetchUsersList();
+          fetchAdminChats();
+        } else {
+          fetchUserChats();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [currentUser]);
 
   // Sync core loops when currentUser is set
   useEffect(() => {
@@ -192,7 +212,7 @@ export default function App() {
         const currentUpdated = data.find((u: User) => u.id === currentUser?.id);
         if (currentUpdated) {
           setCurrentUser(currentUpdated);
-          sessionStorage.setItem("agora_user", JSON.stringify(currentUpdated));
+          localStorage.setItem("agora_user", JSON.stringify(currentUpdated));
         }
       }
     } catch (err: any) {
@@ -425,15 +445,17 @@ export default function App() {
           
           const updatedUser = { ...currentUser, quotaUsed: finalData.quotaUsed };
           setCurrentUser(updatedUser);
-          sessionStorage.setItem("agora_user", JSON.stringify(updatedUser));
+          localStorage.setItem("agora_user", JSON.stringify(updatedUser));
         } else {
           // Fallback: reload chats if final complete state wasn't successfully decoded
           await fetchUserChats();
         }
       } else {
         const errorData = await res.json();
-        // Keep the user message so they can see and retry it
-        setModelError(errorData.error || "Une erreur s'est produite lors de l'orchestration des agents.");
+        // Show error code to user (admin sees description in error directory)
+        const code = errorData.errorCode || 503;
+        const errInfo = getErrorDisplay(code);
+        setModelError(errInfo.display);
       }
     } catch (err: any) {
       if (err.name === "AbortError" || err.message === "The user aborted a request.") {
@@ -442,7 +464,7 @@ export default function App() {
         await fetchUserChats();
       } else {
         console.error("Error sending message", err);
-        setModelError("Connexion perdue avec la passerelle d'agents Agora AI.");
+        setModelError(getErrorDisplay(301).display);
       }
     } finally {
       abortControllerRef.current = null;
@@ -490,7 +512,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        localStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast(`Clé API ${provider.toUpperCase()} activée avec succès !`);
       }
     } catch (err) {
@@ -507,7 +529,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        localStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast("Clé API retirée.");
       }
     } catch (err) {
@@ -527,7 +549,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setCurrentUser(data.user);
-        sessionStorage.setItem("agora_user", JSON.stringify(data.user));
+        localStorage.setItem("agora_user", JSON.stringify(data.user));
         showToast("Mémoire et préférences de l'IA synchronisées !");
       }
     } catch (err) {
@@ -602,7 +624,7 @@ export default function App() {
   // Logout
   const handleLogout = () => {
     setCurrentUser(null);
-    sessionStorage.removeItem("agora_user");
+    localStorage.removeItem("agora_user");
     setChats([]);
     setActiveChat(null);
   };
@@ -610,7 +632,7 @@ export default function App() {
   if (!currentUser) {
     return <AuthScreen onLoginSuccess={(u) => {
       setCurrentUser(u);
-      sessionStorage.setItem("agora_user", JSON.stringify(u));
+      localStorage.setItem("agora_user", JSON.stringify(u));
     }} isLoading={isLoadingData} />;
   }
 
