@@ -2634,6 +2634,61 @@ app.delete("/api/scheduled-tasks/:taskId", async (req, res) => {
   }
 });
 
+// Diagnostic endpoint — checks env vars and API key validity
+app.get("/api/debug-keys", async (req, res) => {
+  const results: Record<string, any> = {};
+  const envKeys = [
+    "MISTRAL_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+    "COHERE_API_KEY", "CEREBRAS_API_KEY", "OPENAI_API_KEY",
+    "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY",
+  ];
+  for (const key of envKeys) {
+    const val = process.env[key];
+    results[key] = val ? `${val.substring(0, 8)}... (${val.length} chars)` : "NOT SET";
+  }
+
+  // Quick Mistral test (3s timeout)
+  const mistralKey = process.env.MISTRAL_API_KEY;
+  if (mistralKey) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const resp = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${mistralKey}` },
+        body: JSON.stringify({ model: "mistral-small-latest", messages: [{ role: "user", content: "Say OK" }], max_tokens: 5, stream: false }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      results["mistral_test"] = { status: resp.status, ok: resp.ok, body: (await resp.text()).substring(0, 150) };
+    } catch (e: any) {
+      results["mistral_test"] = { error: e.message };
+    }
+  }
+
+  // Quick OpenRouter free test
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${orKey}`, "HTTP-Referer": "https://agora-ai-clean.vercel.app", "X-Title": "Agora AI" },
+        body: JSON.stringify({ model: "google/gemini-2.5-flash:free", messages: [{ role: "user", content: "Say OK" }], max_tokens: 5 }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      results["openrouter_free_test"] = { status: resp.status, ok: resp.ok, body: (await resp.text()).substring(0, 150) };
+    } catch (e: any) {
+      results["openrouter_free_test"] = { error: e.message };
+    }
+  }
+
+  res.json(results);
+});
+
 // Start server/Vite middleware setup
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
