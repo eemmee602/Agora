@@ -1503,13 +1503,18 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   const { senderId, senderName, content, attachments } = req.body;
   
   // On Vercel, each request may hit a different instance.
-  // Force-sync from Supabase to get the latest DB state.
+  // Force-sync from Supabase to get the latest DB state — with 3s timeout to avoid 504.
   if (SUPABASE_URL && SUPABASE_KEY) {
-    const restored = await supabaseReadDB();
-    if (restored && restored.chats) {
-      _db = restored;
-      try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
-    }
+    try {
+      const restored = await Promise.race([
+        supabaseReadDB(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      if (restored && restored.chats) {
+        _db = restored;
+        try { fs.writeFileSync(DB_PATH, JSON.stringify(restored, null, 2), "utf-8"); } catch {}
+      }
+    } catch {}
   }
   
   const db = readDB();
@@ -1626,7 +1631,7 @@ app.post("/api/chats/:id/messages", async (req, res) => {
       "deepseek/deepseek-chat",
     ] },
     { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
-    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
+    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
     { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
     // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
     // { env: "OPENAI_API_KEY", provider: "openai", models: ["gpt-4o-mini"] },
@@ -1666,14 +1671,12 @@ app.post("/api/chats/:id/messages", async (req, res) => {
 
   // Load model cache to skip recently-failed providers (avoid spamming)
   const modelCache = await getModelCache(user.id);
-  const RECENT_FAIL_COOLDOWN_MS = 5 * 60 * 1000; // 5 min cooldown after failure
+  const RECENT_FAIL_COOLDOWN_MS = 2 * 60 * 1000; // 2 min cooldown (was 5 min — too long)
   const nowMs = Date.now();
   const skipKeys = new Set<string>();
   for (const [key, entry] of Object.entries(modelCache)) {
-    if (entry.fail_count >= 3) {
-      // Permanent skip after 3 fails (until a success resets it)
-      skipKeys.add(key);
-    } else if (entry.last_failure) {
+    // NO permanent skip — cooldown only. Providers can recover (rate limits reset, etc.)
+    if (entry.last_failure) {
       const failTime = new Date(entry.last_failure).getTime();
       if (nowMs - failTime < RECENT_FAIL_COOLDOWN_MS && !entry.last_success) {
         skipKeys.add(key);
@@ -1995,11 +1998,17 @@ Sois concis, chaleureux, structuré et professionnel.`;
                   requestBody.tool_choice = "auto";
                 }
 
+                // Timeout per API call — 12s max (Vercel serverless has ~60s total)
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 12000);
+
                 const response = await fetch(apiUrl, {
                   method: "POST",
                   headers,
-                  body: JSON.stringify(requestBody)
+                  body: JSON.stringify(requestBody),
+                  signal: controller.signal,
                 });
+                clearTimeout(timeoutId);
 
                 if (response.ok) {
                   const data = await response.json();
@@ -2087,7 +2096,8 @@ Sois concis, chaleureux, structuré et professionnel.`;
                     const plainResponse = await fetch(apiUrl, {
                       method: "POST",
                       headers,
-                      body: JSON.stringify({ model: tryModel, messages: sanitizeMessages(toolMessages), stream: false })
+                      body: JSON.stringify({ model: tryModel, messages: sanitizeMessages(toolMessages), stream: false }),
+                      signal: AbortSignal.timeout(12000),
                     });
                     if (plainResponse.ok) {
                       const plainData = await plainResponse.json();
@@ -2521,7 +2531,7 @@ async function executeScheduledTask(task: any): Promise<string> {
     { env: "GROQ_API_KEY", provider: "groq", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
     { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "OPENROUTER_API_KEY", provider: "openrouter", models: ["google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"] },
-    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
+    { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
     { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
   ];
 
@@ -2559,6 +2569,7 @@ async function executeScheduledTask(task: any): Promise<string> {
           method: "POST",
           headers,
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(12000),
         });
 
         if (resp.ok) {
