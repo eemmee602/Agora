@@ -1568,7 +1568,7 @@ app.post("/api/chats/:id/messages", async (req, res) => {
     }
   }
 
-  // 2. Build multi-agent task steps based on prompt intent
+  // 2. Build real execution steps (no more fake agent orchestration)
   const steps: MessageStep[] = [];
   const codeFiles: { fileName: string; language: string; content: string }[] = [];
   const sources: { title: string; url: string }[] = [];
@@ -1576,132 +1576,15 @@ app.post("/api/chats/:id/messages", async (req, res) => {
   // Track tool calls for context persistence across messages
   const toolCallLog: { tool: string; args: any; result: string; success: boolean }[] = [];
 
-  const lowerContent = content.toLowerCase();
-  // Exclude question prefixes to prevent generating empty files for general chitchat/questions
-  const hasCodeQuestionPrefix = /(sais-tu|peux-tu|tu peux|est-ce que tu|comment tu|que sais|qu'est-ce que tu|qu'est ce que tu|pourquoi|tu sais)/gi.test(content);
-  const requiresCode = (
-    lowerContent.includes("écris un") ||
-    lowerContent.includes("génère un") ||
-    lowerContent.includes("code-moi") ||
-    lowerContent.includes("code moi") ||
-    lowerContent.includes("crée un script") ||
-    lowerContent.includes("crée un code") ||
-    lowerContent.includes("faire un script") ||
-    lowerContent.includes("script lua") ||
-    lowerContent.includes("script python") ||
-    (lowerContent.includes("code") && (lowerContent.includes("crée") || lowerContent.includes("fais") || lowerContent.includes("génère") || lowerContent.includes("écris") || lowerContent.includes("rédige") || lowerContent.includes("programme")))
-  ) && !hasCodeQuestionPrefix;
-
-  const requiresSearch = lowerContent.includes("cherche") || lowerContent.includes("recherche") || lowerContent.includes("web") || lowerContent.includes("meteo") || lowerContent.includes("qui est") || lowerContent.includes("actualité") || lowerContent.includes("nouvelle");
-
-  // Determine if this is a simple chitchat or greeting
-  const isSimpleChat = !requiresSearch && !requiresCode && content.length <= 50;
-
-  // Stream active agent orchestration steps sequentially
-  if (requiresSearch && !isSimpleChat) {
-    const searchTerms = content.replace(/(cherche|recherche|sur le web|s'il te plait)/gi, "").trim();
-    const searchStep: MessageStep = {
-      id: "step-search",
-      agentId: "agent-searcher",
-      agentName: "Chercheur A∀-04",
-      action: "Recherche en temps réel sur le web",
-      status: "completed",
-      searchQuery: searchTerms || "Agora Ai collaboration",
-      searchLinks: [
-        { title: "Agora Ai Collaborative Systems", url: "https://agora-ai.net/collaboration" },
-        { title: "Multi-Agent Networks Documentation", url: "https://github.com/agora-ai/mcp-hub" },
-        { title: "Framer Motion Glassmorphism Effects", url: "https://motion.dev/guide/glassmorphism" }
-      ]
-    };
-    steps.push(searchStep);
-    sources.push(
-      { title: "Agora Ai Collaborative Systems", url: "https://agora-ai.net/collaboration" },
-      { title: "Multi-Agent Networks Documentation", url: "https://github.com/agora-ai/mcp-hub" }
-    );
-    sendEvent({ type: "step", step: searchStep });
-    await new Promise(r => setTimeout(r, 250));
-  }
-
-  // Allocate Architect (only if active agent work occurred)
-  const hasActiveAgentWork = requiresSearch || requiresCode;
-  if (hasActiveAgentWork && !isSimpleChat) {
-    const archStep: MessageStep = {
-      id: "step-architect",
-      agentId: "agent-architect",
-      agentName: "Architecte A∀-01",
-      action: "Orchestration & Découpage de tâche",
-      status: "completed",
-      details: requiresCode 
-        ? "Analyse structurelle : Demande de génération de script détectée. Planification de l'agent Codeur pour écrire le script et de l'agent Sécurité pour auditer l'exécution."
-        : "Analyse conceptuelle : Traitement sémantique de la demande. Synthèse de la réponse générale."
-    };
-    steps.push(archStep);
-    sendEvent({ type: "step", step: archStep });
-    await new Promise(r => setTimeout(r, 250));
-  }
-
-  // Allocate Coder
-  if (requiresCode && !isSimpleChat) {
-    let fileName = "script.py";
-    let language = "python";
-    let codeStr = "# Code généré par Agora Ai\nprint('Hello world de la part des agents Agora!')";
-
-    if (lowerContent.includes("lua")) {
-      fileName = "skill_updater.lua";
-      language = "lua";
-      codeStr = `-- Extension de compétence Agora Ai\nlocal Agent = {}\nfunction Agent:improve()\n    print("Optimisation de l'algorithme de collaboration")\nend\nreturn Agent`;
-    } else if (lowerContent.includes("html") || lowerContent.includes("css") || lowerContent.includes("interface")) {
-      fileName = "index.html";
-      language = "html";
-      codeStr = `<!DOCTYPE html>\n<html>\n<head>\n  <title>Composant Liquid Glass</title>\n  <style>\n    .glass { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }\n  </style>\n</head>\n<body>\n  <div class="glass">Interface Agora AI Active</div>\n</body>\n</html>`;
-    } else if (lowerContent.includes("js") || lowerContent.includes("javascript") || lowerContent.includes("typescript")) {
-      fileName = "agent_pipeline.ts";
-      language = "typescript";
-      codeStr = `// TypeScript module\nexport async function runPipeline(prompt: string) {\n  console.log("Exécution sécurisée de l'agent");\n}`;
-    }
-
-    const coderStep: MessageStep = {
-      id: "step-coder",
-      agentId: "agent-coder",
-      agentName: "Codeur A∀-02",
-      action: "Génération de script spécialisé",
-      status: "completed",
-      codeBlock: {
-        fileName,
-        language,
-        code: codeStr
-      }
-    };
-    steps.push(coderStep);
-    codeFiles.push({ fileName, language, content: codeStr });
-
-    // Coder self-learning skill update (simulating agent improving)
-    const coder = db.agents.find(a => a.id === "agent-coder");
-    if (coder) {
-      const newSkill = `Optimisation syntaxique ${language.toUpperCase()}`;
-      if (!coder.skills.includes(newSkill)) {
-        coder.skills.push(newSkill);
-        addLog("success", `Apprentissage : Codeur a assimilé la compétence "${newSkill}"`, "Système d'Apprentissage");
-      }
-    }
-    sendEvent({ type: "step", step: coderStep });
-    await new Promise(r => setTimeout(r, 250));
-  }
-
-  // Allocate Security audit (only if code was written)
-  if (requiresCode && !isSimpleChat) {
-    const secStep: MessageStep = {
-      id: "step-security",
-      agentId: "agent-security",
-      agentName: "Sécurité A∀-03",
-      action: "Audit de conformité et de sandboxing",
-      status: "completed",
-      details: "Audit statique complété. 0 faille détectée. Clé de chiffrement validée. Autorisation d'écriture accordée."
-    };
-    steps.push(secStep);
-    sendEvent({ type: "step", step: secStep });
-    await new Promise(r => setTimeout(r, 250));
-  }
+  // Stream a single "processing" step to the frontend (replaces fake multi-agent steps)
+  const processingStep: MessageStep = {
+    id: "step-processing",
+    agentId: "agent-architect",
+    agentName: "Agora AI",
+    action: "Traitement de votre demande...",
+    status: "running"
+  };
+  sendEvent({ type: "step", step: processingStep });
 
   // 3. Make the API Call to generate final text response
   let finalAiResponse = "";
@@ -1722,18 +1605,18 @@ app.post("/api/chats/:id/messages", async (req, res) => {
       "qwen/qwen-2.5-72b-instruct",
       "mistralai/mistral-7b-instruct",
       "deepseek/deepseek-chat",
-      "anthropic/claude-3.5-haiku",
     ] },
     { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
-    { env: "GEMINI_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
-    { env: "GOOGLE_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
     // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
     // { env: "OPENAI_API_KEY", provider: "openai", models: ["gpt-4o-mini"] },
+    // Google/Gemini retiré — clé locale invalide (22 chars). Remettre quand Emerick aura une clé valide.
+    // { env: "GEMINI_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
+    // { env: "GOOGLE_API_KEY", provider: "google", models: ["gemini-2.5-flash", "gemini-2.0-flash"] },
     { env: "TOGETHER_API_KEY", provider: "together", models: ["meta-llama/Llama-3.3-70B-Instruct-Turbo"] },
     { env: "DEEPSEEK_API_KEY", provider: "deepseek", models: ["deepseek-chat"] },
     { env: "PERPLEXITY_API_KEY", provider: "perplexity", models: ["llama-3.1-sonar-small-128k-online"] },
-    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
     { env: "XAI_API_KEY", provider: "xai", models: ["grok-beta"] },
     { env: "AI21_API_KEY", provider: "ai21", models: ["jamba-1.5-large"] },
     { env: "ANTHROPIC_API_KEY", provider: "anthropic", models: ["claude-3-5-sonnet-20241022"] },
@@ -1798,20 +1681,30 @@ app.post("/api/chats/:id/messages", async (req, res) => {
     return 0;
   });
 
+  // Update processing step to completed
+  processingStep.status = "completed";
+  processingStep.action = "Réponse prête";
+
   // Check if there are any previous agent messages to suppress repetitive greetings
   const hasPreviousAgentMessage = chat.messages.slice(0, chat.messages.length - 1).some(m => m.senderRole === "agent");
 
   // Construct context-rich System Prompt including user memory
-  let systemPrompt = `Tu es Agora Ai, un assistant IA français intelligent et polyvalent. Tu es naturel, fluide et vas droit au but.
+  let systemPrompt = `Tu es Agora Ai, un assistant IA français intelligent, naturel et humain. Tu parles comme un ami qui sait beaucoup de choses — pas comme un robot.
 
 PRINCIPES DE COMMUNICATION :
 - Réponds directement à la question SANS te présenter ni saluer à chaque message.
-- CONCENTRE-TOI sur la question actuelle de l'utilisateur. Ne ramène PAS d'anciens sujets de conversation sauf si l'utilisateur fait explicitement référence à quelque chose de précédent.
-- Si l'utilisateur change de sujet, RÉPONDS au nouveau sujet. Ne confonds pas les sujets précédents avec le sujet actuel.
-- Si la demande est ambiguë ou manque de contexte crucial, pose UNE question clarificatrice courte avant de répondre.
-- Adapte ton niveau de détail à la demande : question simple = réponse simple, question complexe = réponse structurée.
-- Si tu as fait une action (outil, requête, code), rappelle-le brièvement dans ta réponse pour que l'utilisateur sache ce qui a été fait.
-- IMPORTANT : Chaque message de l'utilisateur est une NOUVELLE question. Traite-la comme telle, sans supposer qu'elle fait suite à un sujet précédent sauf si explicitement lié.`;
+- Tu as accès à TOUT l'historique de la conversation (jusqu'à 50 messages). Utilise-le pour comprendre le contexte.
+- Si l'utilisateur fait référence à quelque chose dit plus tôt, RÉUTILISE ce contexte. Ne demande pas "qu'est-ce que tu veux dire ?" si la réponse est dans l'historique.
+- Si la demande est ambiguë, pose UNE question courte avant de répondre.
+- Adapte ton niveau de détail : question simple = réponse simple, question complexe = réponse structurée.
+- Si tu as fait une action (outil, requête), rappelle-le brièvement.
+- Chaque message est une NOUVELLE question mais dans le CONTINUITÉ de la conversation. Traite-la comme telle.
+
+MÉMOIRE OBLIGATOIRE :
+- Tu as une mémoire persistante. QUAND l'utilisateur te dit une information personnelle (nom, âge, date de naissance, métier, lieu, préférence, projet), tu DOIS la sauver avec <memory_add>.
+- QUAND l'utilisateur te dit "mets ça en mémoire" ou "sauvegarde ça" ou "retiens ça", tu DOIS générer une balise <memory_add> avec l'information exacte.
+- QUAND l'utilisateur te demande "est-ce que tu te souviens de..." ou "qu'est-ce que tu sais sur moi", UTILISE les mémoires persistantes pour répondre.
+- N'ATTENDS PAS que l'utilisateur te demande de sauver. Sois PROACTIF : si tu apprends quelque chose de nouveau et utile, sauve-le.`;
 
   // Load persistent memories from Supabase
   const memories = await loadUserMemories(user.id);
@@ -1860,13 +1753,15 @@ RÈGLES CRITIQUES :
 ── SYSTÈME DE MÉMOIRE PERSISTANTE ──
 Tu as une mémoire persistante sur cet utilisateur. Elle est stockée côté serveur et survit entre les conversations et les appareils. C'est ta mémoire long-terme, comme n'importe quelle IA moderne.
 
-QUAND sauver une mémoire — SOIS PROACTIF, n'attends pas que l'utilisateur te le demande :
+QUAND sauver une mémoire — SOIS TRÈS PROACTIF, n'attends pas que l'utilisateur te le demande :
 - L'utilisateur te dit son nom, son âge, sa date de naissance/anniversaire, son métier, son lieu → SAUVE IMMÉDIATEMENT
 - L'utilisateur te dit une préférence (style de réponse, langue, format, outil préféré) → SAUVE
 - L'utilisateur parle de son projet, son travail, son contexte personnel/professionnel → SAUVE
 - Tu observes quelque chose de récurrent (il pose toujours des questions sur X, il code en Y, il préfère Z) → SAUVE
 - L'utilisateur corrige quelque chose que tu avais dit (apprends la correction) → SAUVE
 - L'utilisateur te donne une information personnelle (anniversaire, passion, hobby, école, nom de famille) → SAUVE IMMÉDIATEMENT en category="facts"
+- L'utilisateur te dit "mets en mémoire" / "sauvegarde ça" / "retiens ça" → SAUVE EXACTEMENT ce qu'il a dit, MOT POUR MOT
+- L'utilisateur te dit "tu te souviens de X ?" → VÉRIFIE dans tes mémoories et RÉPONDS avec ce que tu sais
 
 COMMENT sauver une mémoire — utilise ces balises à la TOUTE FIN de ta réponse :
 
@@ -1895,8 +1790,8 @@ Si l'utilisateur te demande de renommer ce chat, de changer son titre ou de l'ap
 Sois concis, chaleureux, structuré et professionnel.`;
 
   // Limit conversation history to last N messages to fit within context window
-  // 20 messages = less confusion between topics, better focus on current question
-  const MAX_HISTORY_MESSAGES = 20;
+  // 50 messages = full context awareness, user wants "tout tout tout le chat"
+  const MAX_HISTORY_MESSAGES = 50;
   const recentMessages = chat.messages.length > MAX_HISTORY_MESSAGES
     ? chat.messages.slice(-MAX_HISTORY_MESSAGES)
     : chat.messages;
@@ -2048,6 +1943,20 @@ Sois concis, chaleureux, structuré et professionnel.`;
           let toolMessages: any[] = [...formattedOpenRouterMessages];
           let lastErr: any = null;
 
+          // Sanitize messages for provider compatibility
+          // Cohere requires assistant messages to have non-null content
+          // Some providers reject empty tool results
+          const sanitizeMessages = (msgs: any[]) => msgs.map(m => {
+            const cleaned = { ...m };
+            if (cleaned.role === "assistant" && cleaned.tool_calls && (!cleaned.content || cleaned.content === "")) {
+              cleaned.content = "J'utilise un outil pour répondre à votre demande.";
+            }
+            if (cleaned.role === "tool" && (!cleaned.content || cleaned.content === "")) {
+              cleaned.content = "(résultat vide)";
+            }
+            return cleaned;
+          });
+
           for (const tryModel of modelsToTry) {
             if (finalAiResponse) break;
             try {
@@ -2056,7 +1965,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
                 // Use non-streaming request (more reliable on Vercel serverless)
                 const requestBody: any = {
                   model: tryModel,
-                  messages: toolMessages,
+                  messages: sanitizeMessages(toolMessages),
                   stream: false
                 };
 
@@ -2081,9 +1990,11 @@ Sois concis, chaleureux, structuré et professionnel.`;
                   // Check for tool_calls
                   if (msg?.tool_calls && msg.tool_calls.length > 0 && iteration < MAX_TOOL_ITERATIONS) {
                     // Add assistant message with tool_calls to conversation
+                    // CRITICAL: some providers (Cohere) reject assistant messages with null/empty content
+                    // Always ensure content is a non-empty string
                     toolMessages.push({
                       role: "assistant",
-                      content: msg.content || "",
+                      content: msg.content || "J'utilise un outil pour répondre.",
                       tool_calls: msg.tool_calls
                     });
 
@@ -2157,7 +2068,7 @@ Sois concis, chaleureux, structuré et professionnel.`;
                     const plainResponse = await fetch(apiUrl, {
                       method: "POST",
                       headers,
-                      body: JSON.stringify({ model: tryModel, messages: toolMessages, stream: false })
+                      body: JSON.stringify({ model: tryModel, messages: sanitizeMessages(toolMessages), stream: false })
                     });
                     if (plainResponse.ok) {
                       const plainData = await plainResponse.json();
@@ -2320,22 +2231,29 @@ Sois concis, chaleureux, structuré et professionnel.`;
       }
     }
     
-    // Fallback if no custom key response or custom key failed or regular query
+    // Fallback if no custom key response or custom key failed
+    // Only use Gemini fallback if a valid Google API key exists
     if (!finalAiResponse) {
-      const aiClient = getGeminiClient();
-      const geminiModel = "gemini-2.5-flash";
-      actualModelUsed = geminiModel;
+      const googleKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (googleKey && googleKey.trim().length >= 30) {
+        const aiClient = getGeminiClient();
+        const geminiModel = "gemini-2.5-flash";
+        actualModelUsed = geminiModel;
 
-      finalAiResponse = await callGeminiWithRetry(
-        aiClient,
-        formattedGoogleContents,
-        {
-          systemInstruction: systemPrompt,
-          temperature: 0.7
-        },
-        geminiModel,
-        onChunk
-      );
+        finalAiResponse = await callGeminiWithRetry(
+          aiClient,
+          formattedGoogleContents,
+          {
+            systemInstruction: systemPrompt,
+            temperature: 0.7
+          },
+          geminiModel,
+          onChunk
+        );
+      } else {
+        // No valid Gemini key — throw to trigger the error fallback
+        throw new Error("Aucune clé API valide (Gemini fallback désactivé — clé Google invalide)");
+      }
     }
   } catch (error: any) {
     console.error("Erreur API, fallback simulé:", error);
@@ -2357,16 +2275,11 @@ Sois concis, chaleureux, structuré et professionnel.`;
       keyInfo = `\n\n⚠️ **Aucune clé API active**. Vous utilisez le mode de secours. Configurez une clé API dans l'onglet **Clés** pour activer la vraie IA.`;
     }
 
-    if (requiresCode) {
-      finalAiResponse = `Voici un script généré par le mode de secours (aucune clé API valide). Le code ci-dessous est une structure de base.${keyInfo}`;
-    } else if (requiresSearch) {
-      finalAiResponse = `Recherche impossible sans clé API valide. Ajoutez une clé dans l'onglet Clés pour activer la recherche web.${keyInfo}`;
+    // Simple fallback — no more fake code/search distinction
+    if (hasPreviousAgentMessage) {
+      finalAiResponse = `Je n'ai pas pu traiter votre demande car aucune clé API n'a fonctionné. Ajoutez une clé API valide dans l'onglet **Clés**.${keyInfo}`;
     } else {
-      if (hasPreviousAgentMessage) {
-        finalAiResponse = `Je n'ai pas pu traiter votre demande car aucune clé API n'a fonctionné. Ajoutez une clé API valide dans l'onglet **Clés**.${keyInfo}`;
-      } else {
-        finalAiResponse = `Je n'ai pas pu traiter votre demande. Vérifiez vos clés API dans les paramètres.${keyInfo}`;
-      }
+      finalAiResponse = `Je n'ai pas pu traiter votre demande. Vérifiez vos clés API dans les paramètres.${keyInfo}`;
     }
 
     const words = finalAiResponse.split(/(\s+)/);
@@ -2406,6 +2319,35 @@ Sois concis, chaleureux, structuré et professionnel.`;
     const pattern = delMatch[1].trim();
     if (pattern.length > 0) {
       await deleteMemoryByContent(user.id, pattern);
+    }
+  }
+
+  // AUTO-MEMORY: If the user explicitly asked to save something in memory but the AI
+  // didn't generate <memory_add> tags, save it automatically
+  const memoryRequestPatterns = [
+    /mets?\s+(ça|ca|cela|ceci)\s+(en\s+)?m[éè]moire/i,
+    /sauvegarde?\s+(ça|ca|cela|ceci)/i,
+    /retiens?\s+(ça|ca|cela|ceci)/i,
+    /remember\s+this/i,
+    /n['']oublie\s+(pas\s+)?(ça|ca|cela|ceci)/i,
+    /m[éè]morise?\s+(ça|ca|cela|ceci)/i,
+  ];
+  const userAskedToSave = memoryRequestPatterns.some(p => p.test(content));
+  if (userAskedToSave && memorySavedCount === 0) {
+    // The user asked to save but the AI didn't generate memory tags
+    // Save the user's message content as a memory automatically
+    const memoryContent = content.substring(0, 400);
+    const success = await upsertUserMemory({
+      user_id: user.id,
+      category: "facts",
+      source: "user_stated",
+      content: memoryContent,
+      confidence: 1.0,
+      times_referenced: 0,
+    });
+    if (success) {
+      memorySavedCount++;
+      addLog("success", `Mémoire auto-sauvée (détection request utilisateur)`, "Mémoire Persistante");
     }
   }
   
@@ -2557,17 +2499,19 @@ async function executeScheduledTask(task: any): Promise<string> {
 
   // Try each provider (simplified — no streaming, no tools)
   const ENV_KEY_MAP: { env: string; provider: string; models: string[] }[] = [
-    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "GROQ_API_KEY", provider: "groq", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
+    { env: "MISTRAL_API_KEY", provider: "mistral", models: ["mistral-large-latest", "mistral-small-latest"] },
     { env: "OPENROUTER_API_KEY", provider: "openrouter", models: ["google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus", "command-r"] },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
   ];
 
   const API_ENDPOINTS: Record<string, string> = {
-    mistral: "https://api.mistral.ai/v1/chat/completions",
     groq: "https://api.groq.com/openai/v1/chat/completions",
+    mistral: "https://api.mistral.ai/v1/chat/completions",
     openrouter: "https://openrouter.ai/api/v1/chat/completions",
     cohere: "https://api.cohere.com/v2/chat",
+    cerebras: "https://api.cerebras.ai/v1/chat/completions",
   };
 
   for (const providerDef of ENV_KEY_MAP) {
