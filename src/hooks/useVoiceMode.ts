@@ -269,13 +269,17 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       }
     };
 
-    // Try Groq PlayAI TTS first (natural voice, works on mobile)
+    // Try server TTS first (natural voice via OpenRouter Grok Voice TTS)
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: cleanText }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const blob = await response.blob();
