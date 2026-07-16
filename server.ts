@@ -2742,17 +2742,23 @@ app.post("/api/tts", async (req, res) => {
       signal: AbortSignal.timeout(10000),
     });
 
-    if (!groqResp.ok || !groqResp.body) {
+    if (!groqResp.ok) {
+      const errText = await groqResp.text().catch(() => "");
+      console.error("TTS: Groq returned", groqResp.status, errText.slice(0, 200));
       return res.status(503).json({ error: "tts_unavailable" });
     }
 
     const contentType = groqResp.headers.get("content-type") || "audio/mpeg";
     if (!contentType.startsWith("audio/")) {
+      console.error("TTS: unexpected content-type:", contentType);
       return res.status(503).json({ error: "tts_unavailable" });
     }
 
+    // Buffer the audio (pipe() doesn't work reliably in Vercel serverless)
+    const audioBuffer = Buffer.from(await groqResp.arrayBuffer());
     res.setHeader("Content-Type", contentType);
-    (groqResp.body as any).pipe(res);
+    res.setHeader("Content-Length", String(audioBuffer.length));
+    res.send(audioBuffer);
   } catch (e: any) {
     console.error("TTS proxy error:", e.message);
     res.status(503).json({ error: "tts_unavailable" });
