@@ -2707,6 +2707,58 @@ app.get("/api/debug-keys", async (req, res) => {
   res.json(results);
 });
 
+// TTS proxy: Groq PlayAI text-to-speech
+app.options("/api/tts", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.status(204).end();
+});
+
+app.post("/api/tts", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  const { text, voice } = req.body;
+  if (!text || typeof text !== "string" || !text.trim()) {
+    return res.status(400).json({ error: "missing_text" });
+  }
+  if (!process.env.GROQ_API_KEY) {
+    return res.status(503).json({ error: "tts_unavailable" });
+  }
+
+  try {
+    const groqResp = await fetch("https://api.groq.com/openai/v1/audio/speech", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "playai-tts",
+        input: text.trim(),
+        voice: voice || "Fritz-PlayAI",
+        response_format: "mp3",
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!groqResp.ok || !groqResp.body) {
+      return res.status(503).json({ error: "tts_unavailable" });
+    }
+
+    const contentType = groqResp.headers.get("content-type") || "audio/mpeg";
+    if (!contentType.startsWith("audio/")) {
+      return res.status(503).json({ error: "tts_unavailable" });
+    }
+
+    res.setHeader("Content-Type", contentType);
+    (groqResp.body as any).pipe(res);
+  } catch (e: any) {
+    console.error("TTS proxy error:", e.message);
+    res.status(503).json({ error: "tts_unavailable" });
+  }
+});
+
 // Start server/Vite middleware setup
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {

@@ -44,11 +44,14 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
   // Track whether we're currently speaking (to pause listening)
   const speakingRef = useRef(false);
 
+  // Track the active audio element for TTS (Groq TTS or fallback)
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const maxSpeechTimeoutRef = useRef<number | null>(null);
+
   // Check browser support
   const isSupported =
     typeof window !== "undefined" &&
-    (("webkitSpeechRecognition" in window) || ("SpeechRecognition" in window)) &&
-    "speechSynthesis" in window;
+    (("webkitSpeechRecognition" in window) || ("SpeechRecognition" in window));
 
   // Preload voices (Chrome loads them async — retry until loaded)
   const voicesReadyRef = useRef(false);
@@ -203,9 +206,8 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
   }, [isActive, isSupported, buildRecognition]);
 
   // Speak text via TTS — pauses listening during speech, resumes after
-  const speak = useCallback((text: string) => {
+  const speak = useCallback(async (text: string) => {
     if (!isActive || !text.trim()) return;
-    if (!("speechSynthesis" in window)) return;
 
     // Clean text: remove markdown, code blocks, tool context, memory tags, etc.
     const cleanText = text
@@ -218,17 +220,25 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
       .replace(/\[CONTEXTE OUTILS PRÉCÉDENTS\][\s\S]*$/i, "") // Remove persisted tool context
       .replace(/\[OUTIL:[^\]]+\]/g, "") // Remove tool log entries
-      .replace(/<memory_add[^>]*>[\s\S]*?<\/memory_add>/gi, "") // Remove memory add tags
-      .replace(/<memory_delete>[^\]]*?<\/memory_delete>/gi, "") // Remove memory delete tags
-      .replace(/<update_title>[\s\S]*?<\/update_title>/gi, "") // Remove title tags
-      .replace(/<update_memory>[\s\S]*?<\/update_memory>/gi, "") // Remove old memory tags
+      .replace(/\u003cmemory_add[^\u003e]*\u003e[\s\S]*?\u003c\/memory_add\u003e/gi, "") // Remove memory add tags
+      .replace(/\u003cmemory_delete\u003e[^\]]*?\u003c\/memory_delete\u003e/gi, "") // Remove memory delete tags
+      .replace(/\u003cupdate_title\u003e[\s\S]*?\u003c\/update_title\u003e/gi, "") // Remove title tags
+      .replace(/\u003cupdate_memory\u003e[\s\S]*?\u003c\/update_memory\u003e/gi, "") // Remove old memory tags
       .replace(/\n{3,}/g, "\n\n")
       .trim();
 
     if (!cleanText) return;
 
-    // Cancel any ongoing speech
-    window.speechSynthesis.cancel();
+    // Cancel any ongoing speech/audio
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (maxSpeechTimeoutRef.current) {
+      window.clearTimeout(maxSpeechTimeoutRef.current);
+      maxSpeechTimeoutRef.current = null;
+    }
 
     // Pause listening while speaking
     isPausedRef.current = true;
@@ -242,9 +252,76 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
     speakingRef.current = true;
     callbacksRef.current.onAISpeakingChange?.(true);
 
-    // Chunk text if very long (speechSynthesis can cut off > ~200 chars on some browsers)
+    const resumeListening = () => {
+      if (maxSpeechTimeoutRef.current) {
+        window.clearTimeout(maxSpeechTimeoutRef.current);
+        maxSpeechTimeoutRef.current = null;
+      }
+      setIsSpeaking(false);
+      speakingRef.current = false;
+      callbacksRef.current.onAISpeakingChange?.(false);
+      isPausedRef.current = false;
+      if (shouldRestartRef.current && recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+          setIsListening(true);
+        } catch (e) {}
+      }
+    };
+
+    // Try Groq PlayAI TTS first (natural voice, works on mobile)
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: cleanText }),
+      });
+
+      if (response.ok) {
+        const blob = await response.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          audioRef.current = null;
+          resumeListening();
+        };
+
+        audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
+          audioRef.current = null;
+          resumeListening();
+        };
+
+        // CRITICAL: safety timeout so isSpeaking never stays stuck forever
+        maxSpeechTimeoutRef.current = window.setTimeout(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          URL.revokeObjectURL(audioUrl);
+          audioRef.current = null;
+          resumeListening();
+        }, 30000);
+
+        await audio.play();
+        return;
+      }
+      // response not ok → fall through to speechSynthesis fallback
+    } catch (e) {
+      // network/error → fall through to speechSynthesis fallback
+    }
+
+    // Fallback to native speechSynthesis
+    if (!("speechSynthesis" in window)) {
+      resumeListening();
+      return;
+    }
+
+    // Only chunk if text is very long; Groq handles long text, but for the fallback
+    // keep chunking small enough for speechSynthesis
     const chunks: string[] = [];
-    const maxChunk = 200;
+    const maxChunk = cleanText.length > 2000 ? 500 : 200;
     const sentences = cleanText.match(/[^.!?]+[.!?]*/g) || [cleanText];
     let currentChunk = "";
     for (const sentence of sentences) {
@@ -261,33 +338,20 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
 
     const speakChunk = () => {
       if (chunkIndex >= chunks.length) {
-        // All chunks done — resume listening
-        setIsSpeaking(false);
-        speakingRef.current = false;
-        callbacksRef.current.onAISpeakingChange?.(false);
-        isPausedRef.current = false;
-        if (shouldRestartRef.current && recognitionRef.current) {
-          try {
-            recognitionRef.current.start();
-            setIsListening(true);
-          } catch (e) {}
-        }
+        resumeListening();
         return;
       }
 
       const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
       utterance.lang = "fr-FR";
-      utterance.rate = 1.0; // Natural speed (was 1.1 — too fast for natural speech)
+      utterance.rate = 1.0;
       utterance.pitch = 1.0;
 
-      // Try to pick the best available French voice
       let voices = window.speechSynthesis.getVoices();
-      // Force reload if empty (Chrome quirk)
       if (voices.length === 0) {
         window.speechSynthesis.getVoices();
         voices = window.speechSynthesis.getVoices();
       }
-      // Prefer Google French voice (most natural), then native fr-FR, then any fr
       const frVoice =
         voices.find((v) => v.name.includes("Google") && v.lang === "fr-FR")
         || voices.find((v) => v.lang === "fr-FR" && v.localService && v.name.includes("Amelie"))
@@ -299,11 +363,9 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       if (frVoice) {
         utterance.voice = frVoice;
       }
-      // If no voice at all, set lang and let browser pick default
       if (!frVoice) {
         utterance.lang = "fr-FR";
       }
-      // Ensure volume is at max
       utterance.volume = 1;
 
       utterance.onend = () => {
@@ -319,12 +381,27 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
       window.speechSynthesis.speak(utterance);
     };
 
+    // CRITICAL: safety timeout so isSpeaking never stays stuck forever
+    maxSpeechTimeoutRef.current = window.setTimeout(() => {
+      window.speechSynthesis.cancel();
+      resumeListening();
+    }, 30000);
+
     speakChunk();
   }, [isActive]);
 
   // Stop speaking (if user interrupts)
   const stopSpeaking = useCallback(() => {
-    window.speechSynthesis.cancel();
+    audioRef.current?.pause();
+    audioRef.current && (audioRef.current.currentTime = 0);
+    audioRef.current = null;
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (maxSpeechTimeoutRef.current) {
+      window.clearTimeout(maxSpeechTimeoutRef.current);
+      maxSpeechTimeoutRef.current = null;
+    }
     setIsSpeaking(false);
     speakingRef.current = false;
     isPausedRef.current = false;
@@ -345,8 +422,13 @@ export function useVoiceMode(callbacks: VoiceModeCallbacks) {
           recognitionRef.current.stop();
         } catch (e) {}
       }
+      audioRef.current?.pause();
+      audioRef.current = null;
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
+      }
+      if (maxSpeechTimeoutRef.current) {
+        window.clearTimeout(maxSpeechTimeoutRef.current);
       }
     };
   }, []);
