@@ -1666,7 +1666,7 @@ app.post("/api/chats/:id/messages", async (req, res) => {
     //   "google/gemini-2.5-flash:free", "meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-r1:free",
     // ] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
-    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["gpt-oss-120b", "zai-glm-4.7", "gemma-4-31b"] },
     // OpenAI retiré — clé sk-d924...493c est INVALIDE (401). Ne pas réessayer.
     // { env: "OPENAI_API_KEY", provider: "openai", models: ["gpt-4o-mini"] },
     // Google/Gemini retiré — clé locale invalide (22 chars). Remettre quand Emerick aura une clé valide.
@@ -2563,7 +2563,7 @@ async function executeScheduledTask(task: any): Promise<string> {
     // OpenRouter RETIRÉ — clé invalide (401). Remettre quand Emerick aura une nouvelle clé.
     // { env: "OPENROUTER_API_KEY", provider: "openrouter", models: ["google/gemini-2.5-flash", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"] },
     { env: "COHERE_API_KEY", provider: "cohere", models: ["command-r-plus-08-2024", "command-r-08-2024"] },
-    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["llama-3.3-70b"] },
+    { env: "CEREBRAS_API_KEY", provider: "cerebras", models: ["gpt-oss-120b", "zai-glm-4.7", "gemma-4-31b"] },
   ];
 
   const API_ENDPOINTS: Record<string, string> = {
