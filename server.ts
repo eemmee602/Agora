@@ -2744,14 +2744,14 @@ app.post("/api/tts", async (req, res) => {
 
     if (!groqResp.ok) {
       const errText = await groqResp.text().catch(() => "");
-      console.error("TTS: Groq returned", groqResp.status, errText.slice(0, 200));
-      return res.status(503).json({ error: "tts_unavailable" });
+      console.error("TTS: Groq returned", groqResp.status, errText.slice(0, 500));
+      return res.status(503).json({ error: "tts_unavailable", detail: errText.slice(0, 200) });
     }
 
     const contentType = groqResp.headers.get("content-type") || "audio/mpeg";
     if (!contentType.startsWith("audio/")) {
       console.error("TTS: unexpected content-type:", contentType);
-      return res.status(503).json({ error: "tts_unavailable" });
+      return res.status(503).json({ error: "tts_unavailable", detail: `content-type: ${contentType}` });
     }
 
     // Buffer the audio (pipe() doesn't work reliably in Vercel serverless)
