@@ -2707,7 +2707,7 @@ app.get("/api/debug-keys", async (req, res) => {
   res.json(results);
 });
 
-// TTS proxy: Groq PlayAI text-to-speech
+// TTS proxy: OpenRouter Grok Voice TTS (supports French, 20+ languages)
 app.options("/api/tts", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -2722,47 +2722,79 @@ app.post("/api/tts", async (req, res) => {
   if (!text || typeof text !== "string" || !text.trim()) {
     return res.status(400).json({ error: "missing_text" });
   }
-  if (!process.env.GROQ_API_KEY) {
-    return res.status(503).json({ error: "tts_unavailable" });
+
+  // Try OpenRouter Grok Voice TTS first (supports French + 20 languages)
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
+  if (openrouterKey) {
+    try {
+      const orResp = await fetch("https://openrouter.ai/api/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openrouterKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "x-ai/grok-voice-tts-1.0",
+          input: text.trim().slice(0, 14000), // max 15k chars
+          voice: voice || "Eve", // Eve = natural female, Ara = warm, Rex = deep male, Sal = calm, Leo = energetic
+          response_format: "mp3",
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (orResp.ok) {
+        const ct = orResp.headers.get("content-type") || "audio/mpeg";
+        if (ct.startsWith("audio/")) {
+          const audioBuffer = Buffer.from(await orResp.arrayBuffer());
+          res.setHeader("Content-Type", ct);
+          res.setHeader("Content-Length", String(audioBuffer.length));
+          res.send(audioBuffer);
+          return;
+        }
+      }
+      const errText = await orResp.text().catch(() => "");
+      console.error("TTS: OpenRouter returned", orResp.status, errText.slice(0, 300));
+    } catch (e: any) {
+      console.error("TTS: OpenRouter error:", e.message);
+    }
   }
 
-  try {
-    const groqResp = await fetch("https://api.groq.com/openai/v1/audio/speech", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "playai-tts",
-        input: text.trim(),
-        voice: voice || "Fritz-PlayAI",
-        response_format: "mp3",
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
+  // Fallback: Groq Orpheus (English only, but works if Groq key available)
+  const groqKey = process.env.GROQ_API_KEY;
+  if (groqKey) {
+    try {
+      const groqResp = await fetch("https://api.groq.com/openai/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "canopylabs/orpheus-v1-english",
+          input: text.trim().slice(0, 5000),
+          voice: voice || "tara",
+          response_format: "mp3",
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
 
-    if (!groqResp.ok) {
-      const errText = await groqResp.text().catch(() => "");
-      console.error("TTS: Groq returned", groqResp.status, errText.slice(0, 500));
-      return res.status(503).json({ error: "tts_unavailable", detail: errText.slice(0, 200) });
+      if (groqResp.ok) {
+        const ct = groqResp.headers.get("content-type") || "audio/mpeg";
+        if (ct.startsWith("audio/")) {
+          const audioBuffer = Buffer.from(await groqResp.arrayBuffer());
+          res.setHeader("Content-Type", ct);
+          res.setHeader("Content-Length", String(audioBuffer.length));
+          res.send(audioBuffer);
+          return;
+        }
+      }
+      console.error("TTS: Groq fallback failed");
+    } catch (e: any) {
+      console.error("TTS: Groq fallback error:", e.message);
     }
-
-    const contentType = groqResp.headers.get("content-type") || "audio/mpeg";
-    if (!contentType.startsWith("audio/")) {
-      console.error("TTS: unexpected content-type:", contentType);
-      return res.status(503).json({ error: "tts_unavailable", detail: `content-type: ${contentType}` });
-    }
-
-    // Buffer the audio (pipe() doesn't work reliably in Vercel serverless)
-    const audioBuffer = Buffer.from(await groqResp.arrayBuffer());
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Length", String(audioBuffer.length));
-    res.send(audioBuffer);
-  } catch (e: any) {
-    console.error("TTS proxy error:", e.message);
-    res.status(503).json({ error: "tts_unavailable" });
   }
+
+  res.status(503).json({ error: "tts_unavailable" });
 });
 
 // Start server/Vite middleware setup
