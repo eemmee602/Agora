@@ -336,7 +336,8 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                 </button>
               </div>
             );
-          })()}
+          );
+        })()}
 
           {/* Refresh/Reload Preview (only when in preview mode) */}
           {(() => {
