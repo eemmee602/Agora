@@ -332,12 +332,11 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                   className={`px-3 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "preview" ? "bg-emerald-600/30 text-white border border-emerald-500/30 shadow-md shadow-emerald-600/5" : "text-gray-400 hover:text-white"}`}
                 >
                   {language === "html" ? <Eye className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
-                  <span>{language === "html" ? "Aperçu" : "Exécuter"</span>
+                  <span>{language === "html" ? "Aperçu" : "Exécuter"</span>}
                 </button>
               </div>
             );
-          );
-        })()}
+          })()}
 
           {/* Refresh/Reload Preview (only when in preview mode) */}
           {(() => {
@@ -354,7 +353,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
             );
-          })()}
+          })()}};
 
           {/* Download Button */}
           <button
@@ -384,11 +383,13 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
             return (
               <button
                 type="button"
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer"
-                title={isFullscreen ? "Réduire" : "Plein écran"}
+                onClick={() => {
+                  setIsFullscreen(!isFullscreen);
+                }}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer flex items-center"
+                title="Plein écran"
               >
-                {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                <Maximize2 className="w-3.5 h-3.5" />
               </button>
             );
           })()}
@@ -397,135 +398,64 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
     );
   };
 
-  const executorFrame = (
-    <div className="w-full h-full bg-[#0d0e12] relative overflow-hidden flex flex-col">
-      {activeTab === "code" ? (
-        <pre className="p-4 text-gray-300 overflow-auto font-mono text-xs leading-relaxed flex-1 select-text selection:bg-indigo-500/30 select-all max-h-[350px]">
-          <code>{code}</code>
-        </pre>
-      ) : (
-        <div className="flex-1 w-full relative min-h-[220px] bg-black">
-          <iframe
-            key={`${language}||${code}||${version}`}
-            ref={iframeRef}
-            srcDoc={getSrcDoc()}
-            className="w-full h-full border-none bg-black"
-            sandbox="allow-scripts"
-            title="sandbox-executor"
-          />
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <>
-      {/* Inline view in the chat bubble stretching to the edges of the balloon using negative horizontal margins */}
-      <div className="-mx-4 my-3 bg-gray-950/90 border-y border-white/10 flex flex-col transition_all duration-300">
+      <div className="relative w-full h-full bg-black/50 rounded-2xl border border-white/5 overflow-hidden flex flex-col">
         {renderHeader()}
-        {executorFrame}
-      </div>
-
-      {/* Fullscreen Portal Overlay */}
-      {isFullscreen && (
-        <div className="fixed inset-0 z-[99999] bg-black/95 backdrop-blur-md flex flex-col p-4 sm:p-6 md:p-10 animate-in fade_in zoom-in duration-200">
-          <div className="w-full max-w-7xl mx-auto flex-1 flex flex-col bg-gray-950 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
-            {/* Fullscreen Custom Header */}
-            <div className="px-5 py-3.5 bg-gray-900 border-b border-white/5 flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <span className="px-2.5 py-1 rounded bg-indigo-500/20 text-indigo-300 font-bold uppercase tracking-wider text-[10px] border border-indigo-500/30">
-                  {language}
-                </span>
-                <h4 className="text-white font-bold tracking-tight text-sm">
-                  Exécuteur de code en plein écran (Zéro Quota)
-                </h4>
-              </div>
-              <div className="flex items-center space-x-2">
-                {/* Mode Toggles */}
-                {(() => {
-                  const cleanLang = language.toLowerCase().trim();
-                  const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
-                  if (!isRunnable) return null;
-                  return (
-                    <div className="flex bg-black p-0.5 rounded-lg border border-white/10">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab("code")}
-                        className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "code" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20" : "text-gray-400 hover:text-white"}`}
-                      >
-                        <Code2 className="w-4 h-4" />
-                        <span>Éditeur de Code</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveTab("preview");
-                        }}
-                        className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "preview" ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "text-gray-400 hover:text-white"}`}
-                      >
-                        {language === "html" ? <Eye className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
-                        <span>{language === "html" ? "Aperçu interactif" : "Exécuter la console"</span>
-                      </button>
-                    </div>
-                  );
-                })()}
-
-                {(() => {
-                  const cleanLang = language.toLowerCase().trim();
-                  const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
-                  if (!isRunnable || activeTab !== "preview") return null;
-                  return (
-                    <button
-                      type="button"
-                      onClick={reloadPreview}
-                      className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
-                      title="Réexécuter"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  );
-                })()}
-
-                <button
-                  type="button"
-                  onClick={downloadCode}
-                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
-                  title="Télécharger"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleCopy}
-                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
-                  title="Copier"
-                >
-                  {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsFullscreen(false)}
-                  className="p-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/10 transition_all cursor-pointer ml-4"
-                  title="Fermer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+        <div className="flex-1 relative">
+          {activeTab === "code" && (
+            <div className="flex-1 p-4 bg-black/80">
+              <div className="flex-1 relative w-full h-full">
+                <div className="relative w-full h-full overflow-auto p-4 bg-black/90">
+                  <pre className="whitespace-pre-wrap bg-black/90 text-[12px] font-mono text-gray-300">
+                    <code>{code}</code>
+                  </pre>
+                </div>
               </div>
             </div>
-
-            {/* Code / Executor Frame fullscreen - we want larger height */}
-            <div className="flex-1 w-full bg-[#07080b] flex flex-col relative select-text">
-              {activeTab === "code" ? (
-                <textarea
-                  readOnly
-                  value={code}
-                  className="w-full h-full p-6 text-gray-300 bg-[#07080b] border-none font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none flex-1 select-text"
-                />
-              ) : (
+          )}
+          {activeTab === "preview" && (
+            <div className="flex-1 w-full h-full relative bg-black">
+              <iframe
+                ref={iframeRef}
+                key={`${language}||${code}||${version}`}
+                srcDoc={getSrcDoc()}
+                className="w-full h-full border-none bg-black"
+                sandbox="allow-scripts"
+                title="sandbox-executor"
+              />
+              {isFullscreen && (
+                <button
+                  className="absolute top-2 right-2 z-10 p-1 rounded-lg bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition_all cursor-pointer"
+                  onClick={() => setIsFullscreen(false)}
+                >
+                  <Minimize2 className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {isFullscreen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="relative w-full h-full bg-black/50 rounded-2xl border border-white/5 overflow-hidden flex flex-col max-w-6xl max-h-[90vh]">
+            {renderHeader()}
+            <div className="flex-1 relative">
+              {activeTab === "code" && (
+                <div className="flex-1 p-4 bg-black/80">
+                  <div className="flex-1 relative w-full h-full">
+                    <div className="relative w-full h-full overflow-auto p-4 bg-black/90">
+                      <pre className="whitespace-pre-wrap bg-black/90 text-[12px] font-mono text-gray-300">
+                        <code>{code}</code>
+                      </pre>
+                    </div>
+                  </div>
+                )
+              )}
+              {activeTab === "preview" && (
                 <div className="flex-1 w-full h-full relative bg-black">
                   <iframe
+                    ref={iframeRef}
                     key={`${language}||${code}||${version}`}
                     srcDoc={getSrcDoc()}
                     className="w-full h-full border-none bg-black"
@@ -535,6 +465,12 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                 </div>
               )}
             </div>
+            <button
+              className="absolute top-2 right-2 z-10 p-1 rounded-lg bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10 transition_all cursor-pointer"
+              onClick={() => setIsFullscreen(false)}
+            >
+              <Minimize2 className="w-3 h-3" />
+            </button>
           </div>
         </div>
       )}
