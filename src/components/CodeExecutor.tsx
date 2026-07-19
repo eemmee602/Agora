@@ -458,7 +458,6 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                       <button
                         type="button"
                         onClick={() => {
-                          reloadPreview();
                           setActiveTab("preview");
                         }}
                         className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "preview" ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "text-gray-400 hover:text-white"}`}
