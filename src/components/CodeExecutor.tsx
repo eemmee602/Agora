@@ -157,14 +157,14 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
 
             // Capture errors
             window.onerror = function(message, source, lineno, colno, error) {
-              printLine(\`Erreur Ligne \${lineno}: \${message}\`, 'log-line error-line');
+              printLine(`Erreur Ligne ${lineno}: ${message}`, 'log-line error-line');
               return true;
             };
 
             try {
               ${code}
             } catch (err) {
-              printLine(\`Erreur d'exécution: \${err.message}\`, 'log-line error-line');
+              printLine(`Erreur d'exécution: ${err.message}`, 'log-line error-line');
             }
           </script>
         </body>
@@ -235,7 +235,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                       local args = {...}
                       local s = ""
                       for idx, val in ipairs(args) do
-                        s = s .. tostring(val) .. (idx < #args and ", " or "")
+                        s = s .. tostring(val) .. (idx < #args && ", " || "")
                       end
                       window:printToConsole("[Roblox Virtual API] ServiceAction: " .. tostring(k) .. "(" .. s .. ")", "api")
                       return t
@@ -264,7 +264,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
               local args = {...}
               local s = ""
               for idx, val in ipairs(args) do
-                s = s .. tostring(val) .. (idx < #args and ", " or "")
+                s = s .. tostring(val) .. (idx < #args && ", " || "")
               end
               window:printToConsole("[FiveM Native] TriggerEvent('" .. eventName .. "', " .. s .. ")", "api")
             end
@@ -524,17 +524,15 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                   className="w-full h-full p-6 text-gray-300 bg-[#07080b] border-none font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none flex-1 select-text"
                 />
               ) : (
-                <div className="wagon?> {/* This is an error in the original file, but we keep it as is for now */}
-                  <div className="flex-1 w-full h-full relative bg-black">
-                    <iframe
-                      key={executionKey}
-                      srcDoc={getSrcDoc()}
-                      className="w-full h-full border-none bg-black"
-                      sandbox="allow-scripts"
-                      title="fullscreen-sandbox-executor"
-                    />
-                  </div>
-                )}
+                <div className="flex-1 w-full h-full relative bg-black">
+                  <iframe
+                    key={`${language}||${code}||${version}`}
+                    srcDoc={getSrcDoc()}
+                    className="w-full h-full border-none bg-black"
+                    sandbox="allow-scripts"
+                    title="fullscreen-sandbox-executor"
+                  />
+                </div>
               )}
             </div>
           </div>
