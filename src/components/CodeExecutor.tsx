@@ -11,11 +11,8 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
   const [activeTab, setActiveTab] = useState<"code" | "preview">("code");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [executionKey, setExecutionKey] = useState(0); // For reloading the frame
+  const [version, setVersion] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  const cleanLang = language.toLowerCase().trim();
-  const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
 
   const handleCopy = async () => {
     try {
@@ -28,12 +25,13 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
   };
 
   const reloadPreview = () => {
-    setExecutionKey(prev => prev + 1);
+    setVersion(v => v + 1);
   };
 
   const downloadCode = () => {
     // Determine appropriate file extension
     let ext = "txt";
+    const cleanLang = language.toLowerCase().trim();
     if (cleanLang === "html") ext = "html";
     else if (cleanLang === "javascript" || cleanLang === "js") ext = "js";
     else if (cleanLang === "lua") ext = "lua";
@@ -52,6 +50,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
 
   // Build the SrcDoc depending on the language
   const getSrcDoc = () => {
+    const cleanLang = language.toLowerCase().trim();
     if (cleanLang === "html") {
       // Add a modern dark styling fallback and inject Tailwind + Font Awesome if needed, or keep it standard
       return `
@@ -123,7 +122,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
           <div id="console"><div class="log-line system-line">[Console Virtuelle JavaScript initialisée]</div></div>
           <script>
             const consoleDiv = document.getElementById('console');
-            
+
             function printLine(text, className = 'log-line') {
               const div = document.createElement('div');
               div.className = className;
@@ -158,14 +157,14 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
 
             // Capture errors
             window.onerror = function(message, source, lineno, colno, error) {
-              printLine(\`Erreur Ligne \${lineno}: \${message}\`, 'log-line error-line');
+              printLine(`Erreur Ligne ${lineno}: ${message}`, 'log-line error-line');
               return true;
             };
 
             try {
               ${code}
             } catch (err) {
-              printLine(\`Erreur d'exécution: \${err.message}\`, 'log-line error-line');
+              printLine(`Erreur d'exécution: ${err.message}`, 'log-line error-line');
             }
           </script>
         </body>
@@ -202,7 +201,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
           <div id="console"><div class="log sys">[Interpréteur Lua 5.3 Virtuel - Fengari VM initialisé]</div></div>
           <script type="text/javascript">
             const consoleDiv = document.getElementById('console');
-            
+
             window.printToConsole = function(text, type = 'log') {
               const div = document.createElement('div');
               div.className = \`log \${type}\`;
@@ -214,7 +213,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
           <script type="application/lua">
             local js = require "js"
             local window = js.global
-            
+
             -- Override print to output to interactive terminal console
             function print(...)
               local args = {...}
@@ -236,7 +235,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                       local args = {...}
                       local s = ""
                       for idx, val in ipairs(args) do
-                        s = s .. tostring(val) .. (idx < #args and ", " or "")
+                        s = s .. tostring(val) .. (idx < #args && ", " || "")
                       end
                       window:printToConsole("[Roblox Virtual API] ServiceAction: " .. tostring(k) .. "(" .. s .. ")", "api")
                       return t
@@ -265,7 +264,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
               local args = {...}
               local s = ""
               for idx, val in ipairs(args) do
-                s = s .. tostring(val) .. (idx < #args and ", " or "")
+                s = s .. tostring(val) .. (idx < #args && ", " || "")
               end
               window:printToConsole("[FiveM Native] TriggerEvent('" .. eventName .. "', " .. s .. ")", "api")
             end
@@ -311,55 +310,57 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
 
         <div className="flex items-center space-x-1">
           {/* Action Tabs */}
-          {isRunnable && (
-            <div className="flex bg-black/40 p-0.5 rounded-lg border border-white/5 mr-2">
-              <button
-                type="button"
-                onClick={() => setActiveTab("code")}
-                className={`px-3 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition-all cursor-pointer flex items-center space-x-1 ${
-                  activeTab === "code"
-                    ? "bg-indigo-600/30 text-white border border-indigo-500/30 shadow-md shadow-indigo-600/5"
-                    : "text-gray-400 hover:text-white"
-                }`}
-              >
-                <Code2 className="w-3.5 h-3.5" />
-                <span>Code</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("preview");
-                  reloadPreview();
-                }}
-                className={`px-3 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition-all cursor-pointer flex items-center space-x-1.5 ${
-                  activeTab === "preview"
-                    ? "bg-emerald-600/30 text-white border border-emerald-500/30 shadow-md shadow-emerald-600/5"
-                    : "text-gray-400 hover:text-white"
-                }`}
-              >
-                {cleanLang === "html" ? <Eye className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
-                <span>{cleanLang === "html" ? "Aperçu" : "Exécuter"}</span>
-              </button>
-            </div>
-          )}
+          {(() => {
+            const cleanLang = language.toLowerCase().trim();
+            const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
+            if (!isRunnable) return null;
+            return (
+              <div className="flex bg-black/40 p-0.5 rounded-lg border border-white/5 mr-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("code")}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1 ${activeTab === "code" ? "bg-indigo-600/30 text-white border border-indigo-500/30 shadow-md shadow-indigo-600/5" : "text-gray-400 hover:text-white"}`}
+                >
+                  <Code2 className="w-3.5 h-3.5" />
+                  <span>Code</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab("preview");
+                  }}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "preview" ? "bg-emerald-600/30 text-white border border-emerald-500/30 shadow-md shadow-emerald-600/5" : "text-gray-400 hover:text-white"}`}
+                >
+                  {language === "html" ? <Eye className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
+                  <span>{language === "html" ? "Aperçu" : "Exécuter"</span>
+                </button>
+              </div>
+            );
+          );
+        })()}
 
           {/* Refresh/Reload Preview (only when in preview mode) */}
-          {isRunnable && activeTab === "preview" && (
-            <button
-              type="button"
-              onClick={reloadPreview}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
-              title="Recharger l'exécution"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          )}
+          {(() => {
+            const cleanLang = language.toLowerCase().trim();
+            const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
+            if (!isRunnable || activeTab !== "preview") return null;
+            return (
+              <button
+                type="button"
+                onClick={reloadPreview}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer"
+                title="Recharger l'exécution"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            );
+          })()}
 
           {/* Download Button */}
           <button
             type="button"
             onClick={downloadCode}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer flex items-center"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer flex items-center"
             title="Télécharger le fichier"
           >
             <Download className="w-3.5 h-3.5" />
@@ -369,23 +370,28 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
           <button
             type="button"
             onClick={handleCopy}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer flex items-center"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer flex items-center"
             title="Copier le code"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
 
           {/* Fullscreen Button */}
-          {isRunnable && (
-            <button
-              type="button"
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all cursor-pointer"
-              title={isFullscreen ? "Réduire" : "Plein écran"}
-            >
-              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            </button>
-          )}
+          {(() => {
+            const cleanLang = language.toLowerCase().trim();
+            const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
+            if (!isRunnable) return null;
+            return (
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition_all cursor-pointer"
+                title={isFullscreen ? "Réduire" : "Plein écran"}
+              >
+                {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              </button>
+            );
+          })()}
         </div>
       </div>
     );
@@ -400,7 +406,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
       ) : (
         <div className="flex-1 w-full relative min-h-[220px] bg-black">
           <iframe
-            key={executionKey}
+            key={`${language}||${code}||${version}`}
             ref={iframeRef}
             srcDoc={getSrcDoc()}
             className="w-full h-full border-none bg-black"
@@ -415,14 +421,14 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
   return (
     <>
       {/* Inline view in the chat bubble stretching to the edges of the balloon using negative horizontal margins */}
-      <div className="-mx-4 my-3 bg-gray-950/90 border-y border-white/10 flex flex-col transition-all duration-300">
+      <div className="-mx-4 my-3 bg-gray-950/90 border-y border-white/10 flex flex-col transition_all duration-300">
         {renderHeader()}
         {executorFrame}
       </div>
 
       {/* Fullscreen Portal Overlay */}
       {isFullscreen && (
-        <div className="fixed inset-0 z-[99999] bg-black/95 backdrop-blur-md flex flex-col p-4 sm:p-6 md:p-10 animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-[99999] bg-black/95 backdrop-blur-md flex flex-col p-4 sm:p-6 md:p-10 animate-in fade_in zoom-in duration-200">
           <div className="w-full max-w-7xl mx-auto flex-1 flex flex-col bg-gray-950 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
             {/* Fullscreen Custom Header */}
             <div className="px-5 py-3.5 bg-gray-900 border-b border-white/5 flex items-center justify-between">
@@ -436,53 +442,54 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
               </div>
               <div className="flex items-center space-x-2">
                 {/* Mode Toggles */}
-                {isRunnable && (
-                  <div className="flex bg-black p-0.5 rounded-lg border border-white/10">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("code")}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition-all cursor-pointer flex items-center space-x-1.5 ${
-                        activeTab === "code"
-                          ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
-                          : "text-gray-400 hover:text-white"
-                      }`}
-                    >
-                      <Code2 className="w-4 h-4" />
-                      <span>Éditeur de Code</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveTab("preview");
-                        reloadPreview();
-                      }}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition-all cursor-pointer flex items-center space-x-1.5 ${
-                        activeTab === "preview"
-                          ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"
-                          : "text-gray-400 hover:text-white"
-                      }`}
-                    >
-                      {cleanLang === "html" ? <Eye className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
-                      <span>{cleanLang === "html" ? "Aperçu interactif" : "Exécuter la console"}</span>
-                    </button>
-                  </div>
-                )}
+                {(() => {
+                  const cleanLang = language.toLowerCase().trim();
+                  const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
+                  if (!isRunnable) return null;
+                  return (
+                    <div className="flex bg-black p-0.5 rounded-lg border border-white/10">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("code")}
+                        className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "code" ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20" : "text-gray-400 hover:text-white"}`}
+                      >
+                        <Code2 className="w-4 h-4" />
+                        <span>Éditeur de Code</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab("preview");
+                        }}
+                        className={`px-4 py-1.5 rounded-md text-[11px] font-bold tracking-wide uppercase transition_all cursor-pointer flex items-center space-x-1.5 ${activeTab === "preview" ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20" : "text-gray-400 hover:text-white"}`}
+                      >
+                        {language === "html" ? <Eye className="w-4 h-4" /> : <Terminal className="w-4 h-4" />}
+                        <span>{language === "html" ? "Aperçu interactif" : "Exécuter la console"</span>
+                      </button>
+                    </div>
+                  );
+                })()}
 
-                {isRunnable && activeTab === "preview" && (
-                  <button
-                    type="button"
-                    onClick={reloadPreview}
-                    className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition-all cursor-pointer"
-                    title="Réexécuter"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                )}
+                {(() => {
+                  const cleanLang = language.toLowerCase().trim();
+                  const isRunnable = cleanLang === "html" || cleanLang === "lua" || cleanLang === "javascript" || cleanLang === "js";
+                  if (!isRunnable || activeTab !== "preview") return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={reloadPreview}
+                      className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
+                      title="Réexécuter"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  );
+                })()}
 
                 <button
                   type="button"
                   onClick={downloadCode}
-                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition-all cursor-pointer"
+                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
                   title="Télécharger"
                 >
                   <Download className="w-4 h-4" />
@@ -491,7 +498,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition-all cursor-pointer"
+                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 border border-white/5 transition_all cursor-pointer"
                   title="Copier"
                 >
                   {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
@@ -500,7 +507,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
                 <button
                   type="button"
                   onClick={() => setIsFullscreen(false)}
-                  className="p-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/10 transition-all cursor-pointer ml-4"
+                  className="p-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 border border-rose-500/10 transition_all cursor-pointer ml-4"
                   title="Fermer"
                 >
                   <X className="w-4 h-4" />
@@ -519,7 +526,7 @@ export default function CodeExecutor({ code, language }: CodeExecutorProps) {
               ) : (
                 <div className="flex-1 w-full h-full relative bg-black">
                   <iframe
-                    key={executionKey}
+                    key={`${language}||${code}||${version}`}
                     srcDoc={getSrcDoc()}
                     className="w-full h-full border-none bg-black"
                     sandbox="allow-scripts"
